@@ -1,0 +1,52 @@
+config:
+  target: "http://localhost:3000"
+  phases:
+    - duration: 60
+      arrivalRate: 10
+      name: "Warm up"
+    - duration: 120
+      arrivalRate: 50
+      name: "Sustained load"
+    - duration: 60
+      arrivalRate: 100
+      name: "Peak load"
+  defaults:
+    headers:
+      Content-Type: "application/json"
+
+scenarios:
+  - name: "Health check"
+    weight: 20
+    requests:
+      - get:
+          url: "/health"
+
+  - name: "List sources"
+    weight: 15
+    requests:
+      - get:
+          url: "/sources"
+
+  - name: "Query events"
+    weight: 30
+    requests:
+      - get:
+          url: "/events?limit=20"
+
+  - name: "Search events by query"
+    weight: 20
+    requests:
+      - get:
+          url: "/events?query=traffic&limit=10"
+
+  - name: "Dashboard stats"
+    weight: 10
+    requests:
+      - get:
+          url: "/dashboard"
+
+  - name: "Library webcams"
+    weight: 5
+    requests:
+      - get:
+          url: "/library/webcams"

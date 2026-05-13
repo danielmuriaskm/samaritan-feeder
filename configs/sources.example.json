@@ -1,0 +1,26 @@
+{
+  "sources": [
+    {
+      "kind": "rss",
+      "name": "Hacker News",
+      "config": { "url": "https://news.ycombinator.com/rss", "maxItems": 20 },
+      "pollIntervalSeconds": 300
+    },
+    {
+      "kind": "rss",
+      "name": "TechCrunch",
+      "config": { "url": "https://techcrunch.com/feed/", "maxItems": 10 },
+      "pollIntervalSeconds": 600
+    },
+    {
+      "kind": "webcam",
+      "name": "Shibuya Crossing",
+      "config": {
+        "url": "https://example-public-webcam.com/shibuya.mjpeg",
+        "frameIntervalSeconds": 60,
+        "motionThreshold": 0.05
+      },
+      "pollIntervalSeconds": 60
+    }
+  ]
+}
