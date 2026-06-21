@@ -14,6 +14,15 @@ primary_region = "lhr"  # London — co-located with samaritan-server (lhr) + EU
   min_machines_running = 1
   processes = ["app"]
 
+  # /health is public (auth middleware exempts it) — enables zero-downtime
+  # bluegreen deploys + restart-on-secret-change.
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
 [[vm]]
   size = "shared-cpu-2x"
   memory = "2gb"
