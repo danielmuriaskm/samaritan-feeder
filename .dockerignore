@@ -9,8 +9,9 @@ dist
 *.log
 _cutover_machine.sh
 
-# not used by the runtime image (final stage copies only dist + migrations)
-web
+# not used by the build/runtime image. NOTE: web/ is NOT excluded — the builder
+# runs `cd web && npm ci && npm run build` and the final stage copies web/dist.
+# (web/node_modules is still excluded by the global node_modules rule above.)
 tests
 docs
 cv-sidecar
