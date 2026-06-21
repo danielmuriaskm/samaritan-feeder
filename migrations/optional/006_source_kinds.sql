@@ -1,0 +1,40 @@
+-- OPTIONAL 006 — allow the 7 new clean-room adapter kinds on a LIVE deployment
+-- whose intelligence_sources_kind_check has drifted past the repo's list.
+--
+-- New kinds added by the brain branch: usgs, eonet, gdacs, nws, abusech, ngamsi, reliefweb
+--
+-- This file is NOT auto-applied (the migrate runner only globs top-level 0*.sql).
+-- Apply it by hand AFTER reviewing, e.g. in the Supabase SQL editor or:
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/optional/006_source_kinds.sql
+-- Ensure the search_path resolves the samaritan schema first:
+--   set search_path = samaritan, public, extensions;
+--
+-- Inspect the current constraint before choosing an option:
+--   SELECT pg_get_constraintdef(oid)
+--     FROM pg_constraint
+--    WHERE conrelid = 'samaritan.intelligence_sources'::regclass
+--      AND conname  = 'intelligence_sources_kind_check';
+--
+-- ============================================================================
+-- OPTION A (ACTIVE — chosen): drop the kind CHECK and let the app be the source of
+-- truth. routes/sources.ts already rejects a source whose `kind` has no registered
+-- adapter, so the DB constraint is redundant and the recurring cause of migration
+-- breakage (it contracted on 001 and on the original 005). Idempotent.
+-- ----------------------------------------------------------------------------
+ALTER TABLE samaritan.intelligence_sources
+  DROP CONSTRAINT IF EXISTS intelligence_sources_kind_check;
+--
+-- ============================================================================
+-- OPTION B (keep a CHECK, widen it): paste your CURRENT allowed list from the
+-- inspect query above, then append the 7 new kinds. This REPLACES the constraint,
+-- so the list below MUST be a SUPERSET of every kind currently in use.
+-- ----------------------------------------------------------------------------
+-- ALTER TABLE samaritan.intelligence_sources
+--   DROP CONSTRAINT IF EXISTS intelligence_sources_kind_check;
+-- ALTER TABLE samaritan.intelligence_sources
+--   ADD CONSTRAINT intelligence_sources_kind_check CHECK (kind IN (
+--     -- <<< paste your existing 40 live kinds here, e.g. >>>
+--     -- 'rss','reddit','mastodon','metoffice','nasa_firms', ... ,
+--     -- then the 7 new ones:
+--     'usgs','eonet','gdacs','nws','abusech','ngamsi','reliefweb'
+--   ));

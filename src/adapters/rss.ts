@@ -40,6 +40,9 @@ export class RssAdapter extends BaseAdapter {
       attributeNamePrefix: '@_',
       parseTagValue: false,
       trimValues: true,
+      // Disable entity expansion to avoid "Entity expansion limit exceeded"
+      // on feeds like The Guardian that have >1000 entities
+      processEntities: false,
     });
     const feed = parser.parse(xml);
 

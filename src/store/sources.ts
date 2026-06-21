@@ -65,6 +65,42 @@ export async function deleteSource(id: string): Promise<void> {
   await exec(`DELETE FROM intelligence_sources WHERE id = $1`, [id]);
 }
 
+/**
+ * Mark a poll cycle as successful: reset the circuit breaker (failures, cooldown)
+ * and record latency. This is the fix for the monotonic error_count that never
+ * reset on success, which made a recovered source look permanently unhealthy.
+ */
+export async function recordPollSuccess(id: string, latencyMs: number): Promise<void> {
+  const now = Date.now();
+  await exec(
+    `UPDATE intelligence_sources
+       SET last_polled_at = $1, error_count = 0, consecutive_failures = 0,
+           cooldown_until = NULL, last_error = NULL, last_latency_ms = $2,
+           health_state = 'healthy', updated_at = $1
+     WHERE id = $3`,
+    [now, Math.max(0, Math.round(latencyMs)), id],
+  );
+}
+
+/**
+ * Record a poll failure: bump error/consecutive-failure counters and (when the
+ * breaker has opened) set the cooldown end so the scheduler stops re-polling a
+ * dead/rate-limited source every tick.
+ */
+export async function recordPollFailure(id: string, errMsg: string, cooldownUntil?: number): Promise<void> {
+  const now = Date.now();
+  await exec(
+    `UPDATE intelligence_sources
+       SET last_polled_at = $1, error_count = error_count + 1,
+           consecutive_failures = consecutive_failures + 1,
+           cooldown_until = $2, last_error = $3,
+           health_state = CASE WHEN $2 IS NULL THEN 'degraded' ELSE 'cooldown' END,
+           updated_at = $1
+     WHERE id = $4`,
+    [now, cooldownUntil ?? null, errMsg.slice(0, 500), id],
+  );
+}
+
 function fromRow(row: Record<string, unknown>): SourceConfig {
   return {
     id: String(row.id),
@@ -81,5 +117,9 @@ function fromRow(row: Record<string, unknown>): SourceConfig {
     createdByUserId: row.created_by_user_id ? String(row.created_by_user_id) : undefined,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
+    consecutiveFailures: row.consecutive_failures != null ? Number(row.consecutive_failures) : undefined,
+    cooldownUntil: row.cooldown_until != null ? Number(row.cooldown_until) : undefined,
+    lastLatencyMs: row.last_latency_ms != null ? Number(row.last_latency_ms) : undefined,
+    healthState: row.health_state ? (row.health_state as SourceConfig['healthState']) : undefined,
   };
 }

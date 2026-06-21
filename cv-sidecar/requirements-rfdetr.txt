@@ -1,0 +1,5 @@
+# Default license-clean detector. RF-DETR is Apache-2.0.
+# This pulls a CPU build of torch (large image) — install the CPU wheel index
+# in the Dockerfile to avoid CUDA. Omit this file (build with DETECTOR=none|onnx)
+# for a lean image.
+rfdetr==1.2.1

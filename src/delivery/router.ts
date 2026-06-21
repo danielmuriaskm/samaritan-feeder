@@ -6,6 +6,7 @@
 import { listSubscriptions, updateLastDelivered } from '../store/subscriptions.js';
 import type { IntelligenceEvent, Subscription } from '../types.js';
 import { pushAlertToSamaritan } from '../samaritan-client.js';
+import { deliverToChannels } from './channels/index.js';
 import { randomUUID } from 'crypto';
 
 export async function routeEventToSubscribers(event: IntelligenceEvent): Promise<void> {
@@ -43,23 +44,25 @@ async function deliverEvent(event: IntelligenceEvent, sub: Subscription): Promis
   const now = Date.now();
 
   switch (sub.deliveryMode) {
-    case 'alert': {
-      await pushAlertToSamaritan({
-        userId: sub.userId,
-        title: event.title ?? `Intel ${event.kind}`,
-        content: event.content,
-        mediaUrls: event.mediaUrls,
-      });
-      break;
-    }
+    case 'alert':
     case 'proactive': {
-      // Queue for batch delivery (e.g. digest) — for now, same as alert
-      await pushAlertToSamaritan({
-        userId: sub.userId,
+      // Fan out to the user's configured channels (telegram/discord/slack/webhook/email),
+      // falling back to the built-in Samaritan push when the user has none configured.
+      const payload = {
         title: event.title ?? `Intel ${event.kind}`,
         content: event.content,
         mediaUrls: event.mediaUrls,
-      });
+        kind: event.kind,
+      };
+      const res = await deliverToChannels(sub.userId, payload);
+      if (res.total === 0) {
+        await pushAlertToSamaritan({
+          userId: sub.userId,
+          title: payload.title,
+          content: payload.content,
+          mediaUrls: payload.mediaUrls,
+        });
+      }
       break;
     }
     case 'passive':
@@ -75,6 +78,6 @@ async function deliverEvent(event: IntelligenceEvent, sub: Subscription): Promis
   await exec(
     `INSERT INTO intelligence_deliveries (id, event_id, user_id, delivery_mode, channel, status, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [randomUUID(), event.id, sub.userId, sub.deliveryMode, 'telegram', 'delivered', now],
+    [randomUUID(), event.id, sub.userId, sub.deliveryMode, 'samaritan', 'delivered', now],
   );
 }
