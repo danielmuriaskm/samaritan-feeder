@@ -1,5 +1,5 @@
 app = "samaritan-feeder"
-primary_region = "iad"
+primary_region = "lhr"  # London — co-located with samaritan-server (lhr) + EU residency
 
 [build]
 

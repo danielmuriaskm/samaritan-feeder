@@ -29,9 +29,10 @@ export class TwitterAdapter extends BaseAdapter {
     const params = new URLSearchParams({
       query,
       max_results: String(maxItems),
-      'tweet.fields': 'created_at,public_metrics,author_id,lang',
-      expansions: 'author_id',
+      'tweet.fields': 'created_at,public_metrics,author_id,lang,geo',
+      expansions: 'author_id,geo.place_id',
       'user.fields': 'username,name',
+      'place.fields': 'full_name,geo',
     });
     if (sinceId) params.set('since_id', sinceId);
 
@@ -52,11 +53,24 @@ export class TwitterAdapter extends BaseAdapter {
     const json = (await res.json()) as TwitterResponse;
     const tweets = json.data ?? [];
     const users = new Map((json.includes?.users ?? []).map((u) => [u.id, u]));
+    const places = new Map((json.includes?.places ?? []).map((p) => [p.id, p]));
 
     const events: RawEvent[] = [];
     for (const tweet of tweets) {
       const author = users.get(tweet.author_id);
       const createdAt = Date.parse(tweet.created_at);
+
+      let location: { lat: number; lon: number } | undefined;
+      if (tweet.geo?.coordinates) {
+        const [lon, lat] = tweet.geo.coordinates.coordinates;
+        location = { lat, lon };
+      } else if (tweet.geo?.place_id) {
+        const place = places.get(tweet.geo.place_id);
+        if (place?.geo?.bbox) {
+          const [minLon, minLat, maxLon, maxLat] = place.geo.bbox;
+          location = { lat: (minLat + maxLat) / 2, lon: (minLon + maxLon) / 2 };
+        }
+      }
 
       events.push(
         this.makeEvent(
@@ -67,6 +81,7 @@ export class TwitterAdapter extends BaseAdapter {
             rawData: tweet as unknown as Record<string, unknown>,
             eventAt: Number.isNaN(createdAt) ? Date.now() : createdAt,
             confidence: this.engagementToConfidence(tweet.public_metrics),
+            location,
             tags: {
               author_id: tweet.author_id,
               author_username: author?.username,
@@ -75,6 +90,7 @@ export class TwitterAdapter extends BaseAdapter {
               retweets: tweet.public_metrics?.retweet_count,
               replies: tweet.public_metrics?.reply_count,
               likes: tweet.public_metrics?.like_count,
+              place_name: places.get(tweet.geo?.place_id ?? '')?.full_name,
             },
           },
           sourceId,
@@ -109,7 +125,7 @@ export class TwitterAdapter extends BaseAdapter {
 
 interface TwitterResponse {
   data?: Tweet[];
-  includes?: { users?: TwitterUser[] };
+  includes?: { users?: TwitterUser[]; places?: TwitterPlace[] };
   meta?: { newest_id?: string; oldest_id?: string };
 }
 
@@ -119,12 +135,22 @@ interface Tweet {
   created_at: string;
   author_id: string;
   lang: string;
+  geo?: {
+    coordinates?: { type: 'Point'; coordinates: [number, number] };
+    place_id?: string;
+  };
   public_metrics?: {
     retweet_count: number;
     reply_count: number;
     like_count: number;
     quote_count: number;
   };
+}
+
+interface TwitterPlace {
+  id: string;
+  full_name: string;
+  geo?: { type: 'Feature'; bbox: [number, number, number, number] };
 }
 
 interface TwitterUser {

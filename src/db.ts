@@ -5,6 +5,9 @@ const { Pool } = pg;
 
 export const pool = new Pool({
   connectionString: config.DATABASE_URL,
+  // Supabase / managed Postgres require TLS. rejectUnauthorized:false accepts the
+  // pooler's own CA chain (the connection is still encrypted). Toggle via DATABASE_SSL.
+  ssl: config.DATABASE_SSL ? { rejectUnauthorized: false } : undefined,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,

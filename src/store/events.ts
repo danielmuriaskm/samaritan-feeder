@@ -45,6 +45,7 @@ export async function listEvents(opts: {
 
 export async function searchEvents(opts: {
   query?: string;
+  sourceId?: string;
   kinds?: EventKind[];
   since?: number;
   limit?: number;
@@ -58,6 +59,7 @@ export async function searchEvents(opts: {
     params.push(`%${opts.query}%`);
     idx++;
   }
+  if (opts.sourceId) { conditions.push(`source_id = $${idx++}`); params.push(opts.sourceId); }
   if (opts.kinds?.length) { conditions.push(`kind = ANY($${idx++}::text[])`); params.push(opts.kinds); }
   if (opts.since) { conditions.push(`event_at >= $${idx++}`); params.push(opts.since); }
 
@@ -68,6 +70,72 @@ export async function searchEvents(opts: {
     [...params, opts.limit ?? 20],
   );
   return rows.map(fromRow);
+}
+
+/**
+ * Top events by composite importance score ("most important first"), not recency.
+ * Falls back to `confidence` for rows not yet scored. The keystone read path for
+ * the dashboard, MCP `top_intelligence` tool, and digest ranking.
+ */
+export async function listTopEvents(opts: {
+  since?: number;
+  kinds?: EventKind[];
+  sourceId?: string;
+  minScore?: number;
+  limit?: number;
+}): Promise<IntelligenceEvent[]> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  let idx = 1;
+
+  if (opts.since) { conditions.push(`event_at >= $${idx++}`); params.push(opts.since); }
+  if (opts.kinds?.length) { conditions.push(`kind = ANY($${idx++}::text[])`); params.push(opts.kinds); }
+  if (opts.sourceId) { conditions.push(`source_id = $${idx++}`); params.push(opts.sourceId); }
+  if (typeof opts.minScore === 'number') { conditions.push(`COALESCE(score, confidence) >= $${idx++}`); params.push(opts.minScore); }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const rows = await query<Record<string, unknown>>(
+    `SELECT * FROM intelligence_events ${where}
+     ORDER BY COALESCE(score, confidence) DESC, event_at DESC LIMIT $${idx++}`,
+    [...params, opts.limit ?? 20],
+  );
+  return rows.map(fromRow);
+}
+
+/**
+ * Nearest text events to a query embedding via the cosine distance pgvector
+ * operator on `vector_v`. Embeddings are stored as `real[]`; we cast to `vector`
+ * at query time so the optional pgvector extension is only required when this is
+ * actually called. Returns [] (not throw) when pgvector/operator is unavailable
+ * so the ILIKE path can remain the default.
+ */
+export async function searchEventsByVector(
+  queryEmbedding: number[],
+  opts: { since?: number; kinds?: EventKind[]; limit?: number } = {},
+): Promise<Array<IntelligenceEvent & { distance: number }>> {
+  if (!queryEmbedding.length) return [];
+  const literal = `[${queryEmbedding.join(',')}]`;
+  const conditions: string[] = ['vector_v IS NOT NULL'];
+  const params: unknown[] = [literal];
+  let idx = 2;
+  if (opts.since) { conditions.push(`event_at >= $${idx++}`); params.push(opts.since); }
+  if (opts.kinds?.length) { conditions.push(`kind = ANY($${idx++}::text[])`); params.push(opts.kinds); }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+  try {
+    const rows = await query<Record<string, unknown>>(
+      `SELECT *, (vector_v::vector <=> $1::vector) AS distance
+         FROM intelligence_events ${where}
+         ORDER BY vector_v::vector <=> $1::vector LIMIT $${idx++}`,
+      [...params, opts.limit ?? 20],
+    );
+    return rows.map((r) => ({ ...fromRow(r), distance: Number(r.distance) }));
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    // undefined extension / type / operator => pgvector not installed; degrade gracefully.
+    if (code === '42704' || code === '42883' || code === '42P01') return [];
+    throw err;
+  }
 }
 
 export async function getEvent(id: string): Promise<IntelligenceEvent | undefined> {
@@ -84,8 +152,8 @@ export async function createEvent(event: Omit<IntelligenceEvent, 'createdAt'>): 
     `INSERT INTO intelligence_events
      (id, source_id, kind, title, content, raw_data, media_urls, embedding,
       vector_v, confidence, sensitivity, tags, location_lat, location_lon,
-      event_at, created_at, dedupe_hash)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      event_at, created_at, dedupe_hash, score, score_components)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
     [
       event.id, event.sourceId, event.kind, event.title ?? null, event.content,
       event.rawData ? JSON.stringify(event.rawData) : null,
@@ -97,6 +165,8 @@ export async function createEvent(event: Omit<IntelligenceEvent, 'createdAt'>): 
       event.location?.lat ?? null,
       event.location?.lon ?? null,
       event.eventAt, now, event.dedupeHash ?? null,
+      event.score ?? null,
+      event.scoreComponents ? JSON.stringify(event.scoreComponents) : null,
     ],
   );
   return { ...event, createdAt: now };
@@ -129,13 +199,13 @@ function fromRow(row: Record<string, unknown>): IntelligenceEvent {
     kind: row.kind as IntelligenceEvent['kind'],
     title: row.title ? String(row.title) : undefined,
     content: String(row.content),
-    rawData: row.raw_data ? JSON.parse(String(row.raw_data)) : undefined,
+    rawData: row.raw_data ? (typeof row.raw_data === 'string' ? JSON.parse(row.raw_data) : row.raw_data as Record<string, unknown>) : undefined,
     mediaUrls: row.media_urls ? (row.media_urls as string[]) : undefined,
     embedding: row.embedding ? Buffer.from(String(row.embedding)) : undefined,
-    vectorV: row.vector_v ? (Array.isArray(row.vector_v) ? row.vector_v as number[] : undefined) : undefined,
+    vectorV: parseVector(row.vector_v),
     confidence: Number(row.confidence),
     sensitivity: row.sensitivity as IntelligenceEvent['sensitivity'],
-    tags: row.tags ? JSON.parse(String(row.tags)) : {},
+    tags: row.tags ? (typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags as Record<string, unknown>) : {},
     location:
       row.location_lat != null && row.location_lon != null
         ? { lat: Number(row.location_lat), lon: Number(row.location_lon) }
@@ -143,5 +213,29 @@ function fromRow(row: Record<string, unknown>): IntelligenceEvent {
     eventAt: Number(row.event_at),
     createdAt: Number(row.created_at),
     dedupeHash: row.dedupe_hash ? String(row.dedupe_hash) : undefined,
+    score: row.score != null ? Number(row.score) : undefined,
+    scoreComponents: row.score_components
+      ? (typeof row.score_components === 'string'
+          ? JSON.parse(row.score_components)
+          : (row.score_components as IntelligenceEvent['scoreComponents']))
+      : undefined,
   };
+}
+
+/**
+ * Robustly decode a stored embedding back to number[]. node-pg returns `real[]`
+ * as a JS array, but a pgvector `vector` column (or some array configs) comes
+ * back as the string form "[1,2,3]" / "{1,2,3}" — the old code dropped those,
+ * silently disabling text vector search. Handle every shape.
+ */
+function parseVector(v: unknown): number[] | undefined {
+  if (v == null) return undefined;
+  if (Array.isArray(v)) return (v as unknown[]).map(Number).filter((n) => Number.isFinite(n));
+  if (typeof v === 'string') {
+    const inner = v.trim().replace(/^[[{]/, '').replace(/[\]}]$/, '');
+    if (!inner) return undefined;
+    const nums = inner.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+    return nums.length ? nums : undefined;
+  }
+  return undefined;
 }

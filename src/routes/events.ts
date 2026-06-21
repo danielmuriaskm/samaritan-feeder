@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { listEvents, searchEvents, getEvent } from '../store/events.js';
+import { listEvents, searchEvents, listTopEvents, getEvent } from '../store/events.js';
+import type { EventKind } from '../types.js';
 
 const app = new Hono();
 
@@ -10,8 +11,11 @@ const querySchema = z.object({
   kinds: z.string().optional(), // comma-separated
   since: z.coerce.number().optional(),
   until: z.coerce.number().optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.coerce.number().int().min(1).max(500).default(20),
   offset: z.coerce.number().int().min(0).default(0),
+  // 005: rank by composite importance score ("most important first") instead of recency.
+  rank: z.enum(['recency', 'score']).optional(),
+  minScore: z.coerce.number().min(0).max(1).optional(),
 });
 
 app.get('/', async (c) => {
@@ -21,13 +25,26 @@ app.get('/', async (c) => {
   }
 
   const p = params.data;
-  const kinds = p.kinds ? p.kinds.split(',') as ('visual' | 'text' | 'anomaly' | 'trend' | 'alert' | 'social_post')[] : undefined;
+  const kinds = p.kinds ? (p.kinds.split(',') as EventKind[]) : undefined;
 
   if (p.query) {
     const events = await searchEvents({
       query: p.query,
+      sourceId: p.sourceId,
       kinds,
       since: p.since,
+      limit: p.limit,
+    });
+    return c.json({ events });
+  }
+
+  // Ranked ("most important first") read path — composite score desc.
+  if (p.rank === 'score') {
+    const events = await listTopEvents({
+      sourceId: p.sourceId,
+      kinds,
+      since: p.since,
+      minScore: p.minScore,
       limit: p.limit,
     });
     return c.json({ events });

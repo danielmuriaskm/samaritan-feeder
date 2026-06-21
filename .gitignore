@@ -1,5 +1,26 @@
 node_modules/
 dist/
-.env
-*.log
 .DS_Store
+
+# secrets — never commit any real .env; keep only the scrubbed template
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+
+# backups / scraper state / large datasets (regenerable; present locally + in the
+# docker build context per .dockerignore — not needed in the repo)
+*.bak
+*.backup
+*.zip
+src/data/windy_*.json
+src/data/skylinewebcams_discovered.json
+src/data/scripts/
+cities15000.txt
+insecam_dump.csv
+live_env_streams.geojson
+madrid_cameras.json
+madrid_cctv.kml
+_cutover_machine.sh

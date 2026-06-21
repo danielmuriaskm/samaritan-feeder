@@ -1,0 +1,1 @@
+"""Samaritan CV sidecar package."""

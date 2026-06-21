@@ -1,0 +1,5 @@
+# Semantic search (optional). open_clip_torch is MIT; CLIP weights are
+# MIT/permissive. Needs torch (already present in the rfdetr/ultralytics images).
+open_clip_torch==2.30.0
+ftfy==6.3.1
+regex==2024.11.6

@@ -26,6 +26,10 @@ export abstract class BaseAdapter implements SourceAdapter {
       eventAt: partial.eventAt ?? Date.now(),
       confidence: partial.confidence ?? 0.5,
       tags: partial.tags,
+      location: partial.location,
+      dedupeContent: partial.dedupeContent,
+      artifactBase64: partial.artifactBase64,
+      embeddingVector: partial.embeddingVector,
     };
   }
 }

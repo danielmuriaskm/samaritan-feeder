@@ -13,25 +13,31 @@ export interface WebcamEntry {
   region: string;
   lat: number;
   lon: number;
-  url: string;
+  infoUrl: string | null;
+  streamUrl: string | null;
+  streamType: string | null;
   provider: string;
   timezone: string;
   category: string;
 }
 
-const library = libraryJson as {
+const library = libraryJson as unknown as {
   version: string;
-  categories: Record<string, { name: string; description: string; sources: Array<{ name: string; country: string; region: string; lat: number; lon: number; url: string; provider: string; timezone: string }> }>;
-  metadata: { total_cameras: number; last_updated: string; verification_method: string; license: string };
+  categories: Record<string, { name: string; description: string; sources: Array<{ name: string; country: string; region: string; lat: number; lon: number; infoUrl: string | null; streamUrl: string | null; streamType: string | null; provider: string; timezone: string }> }>;
+  metadata: { total_cameras: number; last_updated: string; verification_method?: string; license?: string };
 };
 
+let cachedAllWebcams: WebcamEntry[] | undefined;
+
 export function getAllWebcams(): WebcamEntry[] {
+  if (cachedAllWebcams) return cachedAllWebcams;
   const entries: WebcamEntry[] = [];
   for (const [categoryKey, category] of Object.entries(library.categories)) {
     for (const source of category.sources) {
       entries.push({ ...source, category: categoryKey });
     }
   }
+  cachedAllWebcams = entries;
   return entries;
 }
 
@@ -67,6 +73,17 @@ export function searchWebcamsByName(query: string): WebcamEntry[] {
       w.region.toLowerCase().includes(q) ||
       w.provider.toLowerCase().includes(q),
   );
+}
+
+export function getWebcamsInBounds(minLat: number, minLon: number, maxLat: number, maxLon: number): WebcamEntry[] {
+  const all = getAllWebcams();
+  const results: WebcamEntry[] = [];
+  for (const w of all) {
+    if (w.lat >= minLat && w.lat <= maxLat && w.lon >= minLon && w.lon <= maxLon) {
+      results.push(w);
+    }
+  }
+  return results;
 }
 
 export function getMetadata(): typeof library.metadata {

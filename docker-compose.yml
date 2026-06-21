@@ -1,0 +1,116 @@
+# Local/dev orchestration for the feeder + CV sidecar + Postgres.
+#
+#   docker compose up --build
+#
+# The cv-sidecar defaults to RF-DETR (Apache-2.0). Build a lean image with
+# `CV_DETECTOR=onnx docker compose build cv-sidecar` and mount your own .onnx.
+services:
+  postgres:
+    # pgvector image = stock Postgres 16 + the `vector` extension. Harmless for
+    # the default (non-vector) schema; required only if you enable semantic search.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: samaritan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-samaritan}
+      POSTGRES_DB: samaritan
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U samaritan -d samaritan"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: applies every migrations/0*.sql (NOT migrations/optional/), then exits.
+  migrate:
+    image: pgvector/pgvector:pg16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-samaritan}
+    volumes:
+      - ./migrations:/migrations:ro
+    entrypoint: ["sh", "-c", "for f in /migrations/0*.sql; do echo applying $$f; psql -h postgres -U samaritan -d samaritan -v ON_ERROR_STOP=1 -f $$f; done"]
+    restart: "no"
+
+  # Optional: applies the semantic-search migration (needs pgvector). Enable with:
+  #   docker compose --profile semantic up migrate-semantic
+  migrate-semantic:
+    image: pgvector/pgvector:pg16
+    profiles: ["semantic"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-samaritan}
+    volumes:
+      - ./migrations/optional:/optional:ro
+    entrypoint: ["sh", "-c", "for f in /optional/*.sql; do echo applying $$f; psql -h postgres -U samaritan -d samaritan -v ON_ERROR_STOP=1 -f $$f; done"]
+    restart: "no"
+
+  cv-sidecar:
+    build:
+      context: ./cv-sidecar
+      args:
+        DETECTOR: ${CV_DETECTOR:-rfdetr}
+        # Build with WITH_CLIP=true to bundle open_clip for semantic search.
+        WITH_CLIP: ${CV_WITH_CLIP:-false}
+    environment:
+      CV_DETECTOR: ${CV_DETECTOR:-rfdetr}
+      CV_RFDETR_VARIANT: ${CV_RFDETR_VARIANT:-nano}
+      CV_MIN_SCORE: ${CV_MIN_SCORE:-0.35}
+      CV_THREADS: ${CV_THREADS:-2}
+      CV_SIDECAR_TOKEN: ${CV_SIDECAR_TOKEN:-}
+      CV_CLIP_ENABLED: ${CV_CLIP_ENABLED:-false}
+      VISION_REDACT_BEFORE_STORE: "true"
+      ALLOW_FACE_RECOGNITION: "false"
+      ALLOW_PLATE_OCR: "false"
+      ALLOW_PERSON_REID: "false"
+    # No published port by default — only the feeder talks to it internally.
+    expose:
+      - "8800"
+
+  feeder:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      cv-sidecar:
+        condition: service_healthy
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      DATABASE_URL: postgresql://samaritan:${POSTGRES_PASSWORD:-samaritan}@postgres:5432/samaritan
+      SAMARITAN_AUTH_TOKEN: ${SAMARITAN_AUTH_TOKEN:-dev-internal-token}
+      CV_ENABLED: "true"
+      CV_SIDECAR_URL: http://cv-sidecar:8800
+      CV_SIDECAR_TOKEN: ${CV_SIDECAR_TOKEN:-}
+      CV_SIDECAR_TIMEOUT_MS: ${CV_SIDECAR_TIMEOUT_MS:-25000}
+      CV_LLM_ENRICH: ${CV_LLM_ENRICH:-false}
+      CV_CLIP_SECONDS: ${CV_CLIP_SECONDS:-4}
+      CV_SAMPLED_FPS: ${CV_SAMPLED_FPS:-6}
+      CV_SEMANTIC_SEARCH: ${CV_SEMANTIC_SEARCH:-false}
+      CV_CLIP_DIM: ${CV_CLIP_DIM:-512}
+      GO2RTC_URL: ${GO2RTC_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+    ports:
+      - "3000:3000"
+
+  # Optional normalization proxy for protocol-stubborn feeds (YouTube-live, odd
+  # codecs). Off by default — the sidecar pulls clips directly. Enable with:
+  #   docker compose --profile go2rtc up
+  go2rtc:
+    image: alexxit/go2rtc:1.9.9
+    profiles: ["go2rtc"]
+    restart: unless-stopped
+    ports:
+      - "1984:1984"
+
+volumes:
+  pgdata:

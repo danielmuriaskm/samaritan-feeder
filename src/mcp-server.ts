@@ -23,6 +23,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { listSources } from './store/sources.js';
 import { searchEvents, getEvent } from './store/events.js';
+import { extraTools, isExtraTool, handleExtraTool } from './mcp/tools.js';
+import { shapeToolResult } from './mcp/shape.js';
 
 async function main(): Promise<void> {
   const server = new Server(
@@ -46,7 +48,7 @@ async function main(): Promise<void> {
             query: { type: 'string', description: 'Keyword search query' },
             kinds: {
               type: 'array',
-              items: { type: 'string', enum: ['visual', 'text', 'anomaly', 'alert', 'social_post'] },
+              items: { type: 'string', enum: ['visual', 'text', 'anomaly', 'trend', 'alert', 'social_post', 'detection'] },
               description: 'Filter by event kinds',
             },
             since_hours: { type: 'number', default: 24, description: 'How many hours back to search' },
@@ -65,6 +67,8 @@ async function main(): Promise<void> {
           required: ['event_id'],
         },
       },
+      // 005 brain tools: ranked events, correlation signals, source health, RAG.
+      ...extraTools,
     ],
   }));
 
@@ -72,6 +76,11 @@ async function main(): Promise<void> {
     const { name, arguments: args } = request.params;
 
     try {
+      // 005 brain tools (top_intelligence, query_signals, get_source_health, ask_corpus).
+      if (isExtraTool(name)) {
+        return await handleExtraTool(name, args);
+      }
+
       if (name === 'list_intelligence_sources') {
         const sources = await listSources();
         return {
@@ -89,7 +98,10 @@ async function main(): Promise<void> {
           limit: (a.limit as number) ?? 10,
         });
         return {
-          content: [{ type: 'text', text: JSON.stringify(events, null, 2) }],
+          content: [{ type: 'text', text: shapeToolResult(events, {
+            fields: ['id', 'sourceId', 'kind', 'title', 'content', 'score', 'eventAt', 'location.lat', 'location.lon'],
+            maxItems: (a.limit as number) ?? 10,
+          }) }],
         };
       }
 
