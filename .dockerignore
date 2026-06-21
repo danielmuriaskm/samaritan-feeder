@@ -1,0 +1,29 @@
+# deps & build output (reinstalled / rebuilt inside the image)
+node_modules
+dist
+.git
+
+# secrets, logs, local temp
+.env
+.env.*
+*.log
+_cutover_machine.sh
+
+# not used by the runtime image (final stage copies only dist + migrations)
+web
+tests
+docs
+cv-sidecar
+
+# large backups / script-only datasets (runtime imports only the 3 in src/data/*.json kept below)
+**/*.backup
+**/*.bak
+src/data/windy_*.json
+src/data/skylinewebcams_discovered.json
+src/data/scripts
+cities15000.zip
+cities15000.txt
+insecam_dump.csv
+live_env_streams.geojson
+madrid_cameras.json
+madrid_cctv.kml
