@@ -4,10 +4,10 @@ primary_region = "lhr"  # London — co-located with samaritan-server (lhr) + EU
 [build]
 
 [env]
-  PORT = "3000"
+  PORT = "3001"
 
 [http_service]
-  internal_port = 3000
+  internal_port = 3001
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
