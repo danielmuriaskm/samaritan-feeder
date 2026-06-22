@@ -91,8 +91,11 @@ export async function authMiddleware(c: Context, next: Next): Promise<Response |
   if (sso && config.SAMARITAN_SSO_URL) {
     const accept = c.req.header('accept') ?? '';
     if (c.req.method === 'GET' && accept.includes('text/html')) {
-      const origin = new URL(c.req.url).origin;
-      const cb = `${origin}/auth/sso/callback`;
+      // The feeder is served over HTTPS publicly (fly force_https); behind the proxy the
+      // internal request URL is http, so build the callback from Host + forwarded proto.
+      const host = c.req.header('host') ?? new URL(c.req.url).host;
+      const proto = c.req.header('x-forwarded-proto') ?? 'https';
+      const cb = `${proto}://${host}/auth/sso/callback`;
       const sep = config.SAMARITAN_SSO_URL.includes('?') ? '&' : '?';
       return c.redirect(`${config.SAMARITAN_SSO_URL}${sep}redirect=${encodeURIComponent(cb)}`, 302);
     }
