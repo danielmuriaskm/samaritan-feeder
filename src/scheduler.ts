@@ -198,7 +198,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 async function ingestRawEvent(sourceId: string, raw: RawEvent, sourceKind?: SourceKind): Promise<void> {
   // Deduplication (CV events supply a time-bucketed dedupeContent so identical
   // consecutive readings still yield one observation per poll window).
-  const dedupeHash = makeDedupeHash(sourceId, raw.dedupeContent ?? raw.content);
+  // Dedupe key. When an adapter supplies a STABLE upstream id (dedupeContent, e.g.
+  // `nws:<id>` / `usgs:<id>` — globally unique at the upstream), hash it WITHOUT the
+  // sourceId so the same upstream record collapses across overlapping feeds (e.g. an
+  // NWS alert that appears in both the tornado and severe+ feeds). Without a stable
+  // id, fall back to per-source content hashing — keeping byte-identical content from
+  // different sources as distinct events preserves cross-source corroboration.
+  const dedupeHash = raw.dedupeContent
+    ? makeDedupeHash('', raw.dedupeContent)
+    : makeDedupeHash(sourceId, raw.content);
   if (await dedupeExists(dedupeHash)) {
     return;
   }
