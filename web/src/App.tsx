@@ -13,10 +13,11 @@ import DashboardStats from './components/DashboardStats.js';
 import GraphView from './components/GraphView.js';
 import MitreMatrixView from './components/MitreMatrixView.js';
 import OsintHub from './components/OsintHub.js';
+import DiscoverPanel from './components/DiscoverPanel.js';
 
 type TabKey =
   | 'overview' | 'map' | 'events' | 'live' | 'signals' | 'health'
-  | 'brief' | 'channels' | 'sources' | 'graph' | 'mitre' | 'osint' | 'stats';
+  | 'brief' | 'discover' | 'channels' | 'sources' | 'graph' | 'mitre' | 'osint' | 'stats';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
@@ -31,6 +32,7 @@ export default function App() {
     { key: 'signals', label: '🔀 Signals', component: <SignalsPanel /> },
     { key: 'health', label: '🩺 Health', component: <SourceHealthPanel /> },
     { key: 'brief', label: '📰 Brief', component: <BriefPanel /> },
+    { key: 'discover', label: '🧭 Discover', component: <DiscoverPanel /> },
     { key: 'channels', label: '📣 Channels', component: <ChannelsPanel /> },
     { key: 'sources', label: '📡 Sources', component: <SourcePanel /> },
     { key: 'graph', label: '🔗 Graph', component: <GraphView /> },

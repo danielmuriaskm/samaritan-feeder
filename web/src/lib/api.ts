@@ -149,6 +149,33 @@ export async function getCameraMarkers(bbox: string, limit?: number): Promise<Ca
   return data.markers ?? [];
 }
 
+// ---- Discover (LLM-synthesized, Perplexity-style topic tiles) ----
+export interface DiscoverSource { sourceId: string; kind?: string; count?: number }
+export interface DiscoverTile {
+  id: string;
+  title: string;
+  summary: string;
+  category: string;
+  sources: DiscoverSource[];
+  eventIds: string[];
+  score: number;
+  updatedAt: number;
+  generatedBy?: 'llm' | 'deterministic';
+}
+export interface DiscoverStats { tiles: number; eventsConsidered: number; lastRefresh: number; model?: string }
+
+export async function getDiscover(limit?: number): Promise<DiscoverTile[]> {
+  const data = await getJSON<{ tiles: DiscoverTile[] }>('/discover', { limit });
+  return data.tiles ?? [];
+}
+export async function getDiscoverStats(): Promise<DiscoverStats | null> {
+  try {
+    return await getJSON<DiscoverStats>('/discover/stats');
+  } catch {
+    return null;
+  }
+}
+
 // ---- Live stream URL (for EventSource) ----
 export function streamUrl(userId: string, opts: { minScore?: number; kinds?: string[]; sourceId?: string } = {}): string {
   const url = new URL(`${BASE}/stream/${encodeURIComponent(userId)}`, window.location.origin);
