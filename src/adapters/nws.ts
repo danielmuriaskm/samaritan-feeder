@@ -109,6 +109,21 @@ function parseIso(input: string | null | undefined): number | undefined {
 }
 
 /**
+ * Deterministic fallback id for an alert that exposes NO CAP `id`/`identifier`
+ * nor a Feature id. Built from the alert's identifying CAP fields so the same
+ * real-world alert yields the same id regardless of which feed surfaced it. The
+ * effective/onset + expiry instants distinguish a genuinely re-issued alert from
+ * a redundant copy. Normalized (lowercased, whitespace-collapsed) for stability.
+ */
+function compositeNwsId(p: NwsAlertProps, eventName: string, area: string): string {
+  const norm = (s: string | null | undefined): string =>
+    String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const when = p.effective ?? p.onset ?? p.sent ?? '';
+  const until = p.expires ?? '';
+  return [norm(eventName), norm(area), norm(when), norm(until)].join('|');
+}
+
+/**
  * Pure parser: NWS alerts payload -> RawEvent[]. Exported for unit testing
  * without network. `minSeverity` (minor<moderate<severe<extreme) filters out
  * lower-severity alerts; cancellations are skipped.
@@ -141,7 +156,14 @@ export function parseNws(
     const eventName = p.event ?? 'Weather Alert';
     const area = p.areaDesc ?? 'unspecified area';
     const eventAt = parseIso(p.onset) ?? parseIso(p.effective) ?? parseIso(p.sent) ?? Date.now();
-    const id = p.id ?? f.id;
+    // STABLE dedupe id. Prefer the CAP id/identifier (globally unique at NWS), then
+    // the GeoJSON Feature id. If BOTH are absent we synthesize a deterministic
+    // composite from the alert's identifying CAP fields (event + area + the
+    // effective/onset and expiry instants) so EVERY alert still gets a stable
+    // `dedupeContent`. Without this the scheduler would fall back to per-source
+    // content hashing and the same real-world alert ingested by overlapping feeds
+    // (e.g. tornado + severe) would survive as cross-source duplicates.
+    const capId = p.id ?? f.id ?? compositeNwsId(p, eventName, area);
 
     const contentLines = [
       p.headline ?? `${eventName} — ${area}`,
@@ -162,9 +184,9 @@ export function parseNws(
           eventAt,
           confidence: severityConfidence(p.severity),
           location: representativePoint(f.geometry),
-          dedupeContent: id ? `nws:${id}` : undefined,
+          dedupeContent: `nws:${capId}`,
           tags: {
-            nws_id: id,
+            nws_id: capId,
             event: eventName,
             severity: p.severity ?? undefined,
             urgency: p.urgency ?? undefined,

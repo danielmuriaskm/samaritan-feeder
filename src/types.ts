@@ -40,7 +40,10 @@ export type SourceKind =
   | 'nws'
   | 'abusech'
   | 'ngamsi'
-  | 'reliefweb';
+  | 'reliefweb'
+  // NVD CVE feed (NIST National Vulnerability Database, API v2 JSON). Replaces
+  // the retired nvd-rss.xml that now 403s — see src/adapters/nvd.ts.
+  | 'nvd';
 
 export type EventKind = 'visual' | 'text' | 'anomaly' | 'trend' | 'alert' | 'social_post' | 'detection';
 

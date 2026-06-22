@@ -100,6 +100,55 @@ export async function deleteChannel(id: string): Promise<void> {
   await sendJSON('DELETE', `/channels/${encodeURIComponent(id)}`);
 }
 
+// ---- Live radar layers (ADS-B aircraft, AIS ships, camera markers) ----
+// These are on-demand current positions for the visible map view, fetched per
+// bbox (NOT ingested events). bbox is "minLat,minLon,maxLat,maxLon".
+export interface Aircraft {
+  id: string;
+  lat: number;
+  lon: number;
+  heading: number | null;
+  alt: number | null;
+  speed: number | null;
+  callsign: string | null;
+  type: string | null;
+}
+export interface Ship {
+  id: string;
+  lat: number;
+  lon: number;
+  heading: number | null;
+  speed: number | null;
+  name: string | null;
+  type: string | null;
+}
+export interface CameraMarker {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  category: string;
+  country: string;
+  region?: string;
+  provider?: string;
+  streamUrl?: string | null;
+  infoUrl?: string | null;
+  streamType?: string | null;
+}
+
+export async function getAircraft(bbox: string, limit?: number): Promise<Aircraft[]> {
+  const data = await getJSON<{ aircraft: Aircraft[] }>('/radar/aircraft', { bbox, limit });
+  return data.aircraft ?? [];
+}
+export async function getShips(bbox: string, limit?: number): Promise<Ship[]> {
+  const data = await getJSON<{ ships: Ship[] }>('/radar/ships', { bbox, limit });
+  return data.ships ?? [];
+}
+export async function getCameraMarkers(bbox: string, limit?: number): Promise<CameraMarker[]> {
+  const data = await getJSON<{ markers: CameraMarker[] }>('/cameras/markers', { bbox, limit });
+  return data.markers ?? [];
+}
+
 // ---- Live stream URL (for EventSource) ----
 export function streamUrl(userId: string, opts: { minScore?: number; kinds?: string[]; sourceId?: string } = {}): string {
   const url = new URL(`${BASE}/stream/${encodeURIComponent(userId)}`, window.location.origin);

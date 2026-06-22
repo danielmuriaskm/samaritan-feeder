@@ -23,6 +23,8 @@ import authRoutes from './routes/auth.js';
 import graphRoutes from './routes/graph.js';
 import mitreRoutes from './routes/mitre.js';
 import cvRoutes from './routes/cv.js';
+import discoverRoutes from './routes/discover.js';
+import radarRoutes from './routes/radar.js';
 import { listChannels, getChannel, createChannel, deleteChannel, setEnabled, isChannelKind } from './store/channels.js';
 import { listSignals } from './store/signals.js';
 import { latestBrief } from './store/briefs.js';
@@ -101,6 +103,10 @@ app.route('/mitre', mitreRoutes);
 app.route('/cv', cvRoutes);
 app.route('/signals', signalRoutes);
 app.route('/channels', channelRoutes);
+// Discovery (LLM Perplexity-style tiles) + live radar/cameras (consumed by samaritan-server's proxy).
+app.route('/discover', discoverRoutes);
+app.route('/radar', radarRoutes);
+app.route('/cameras', radarRoutes);
 
 // API prefix for web UI (Vite dev proxy uses /api)
 const api = new Hono();
@@ -120,6 +126,9 @@ api.route('/mitre', mitreRoutes);
 api.route('/cv', cvRoutes);
 api.route('/signals', signalRoutes);
 api.route('/channels', channelRoutes);
+api.route('/discover', discoverRoutes);
+api.route('/radar', radarRoutes);
+api.route('/cameras', radarRoutes);
 // Brief + digest, shared between /api (the web console fetches /api/brief/:userId)
 // and the root (Samaritan system-prompt injection).
 async function briefHandler(c: Context) {

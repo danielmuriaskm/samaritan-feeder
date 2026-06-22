@@ -92,6 +92,7 @@ const KIND_FAMILY: Partial<Record<SourceKind, SourceFamily>> = {
   greynoise: 'osint_cyber',
   stix: 'osint_cyber',
   abusech: 'osint_cyber',
+  nvd: 'osint_cyber',
   // camera / computer vision
   webcam: 'camera_cv',
   traffic_cam: 'camera_cv',

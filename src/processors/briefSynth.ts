@@ -52,7 +52,9 @@ const COMMON_CAPITALIZED = new Set<string>([
 
 /**
  * Reduce a scored event list to the digest's working set:
- *   1. drop near-duplicates by `cluster_id` tag (keep the highest-scored member),
+ *   1. collapse the same real-world item to ONE representative (highest score
+ *      wins) via a source-agnostic dedup key (cluster tag, else a normalized
+ *      kind+title+content signature),
  *   2. cap how many survive per source,
  *   3. order by composite score (then recency) descending.
  *
@@ -65,20 +67,20 @@ export function orderAndCap(
   const maxPerSource = opts.maxPerSource ?? MAX_PER_SOURCE;
   const limit = opts.limit ?? MAX_EVENTS_IN_PROMPT;
 
-  // Stable strongest-first ordering before dedup so the cluster representative
-  // we keep is always the highest-scored one.
+  // Stable strongest-first ordering before dedup so the representative we keep
+  // for each real-world item is always the highest-scored one.
   const ranked = [...events].sort(byScoreDesc);
 
-  // Dedup by cluster: the first (strongest) event of each cluster wins. Events
-  // without a clusterId tag are always kept (each is its own singleton).
-  const seenCluster = new Set<string>();
+  // Source-agnostic dedup: the first (strongest) event for each dedup key wins.
+  // The key is the cluster tag when present, else a normalized signature over
+  // kind + title + content — so the same alert re-issued over time or ingested
+  // by overlapping feeds (different sourceId/id) collapses to one representative.
+  const seenKey = new Set<string>();
   const deduped: IntelligenceEvent[] = [];
   for (const e of ranked) {
-    const cid = clusterIdOf(e);
-    if (cid) {
-      if (seenCluster.has(cid)) continue;
-      seenCluster.add(cid);
-    }
+    const key = dedupKeyOf(e);
+    if (seenKey.has(key)) continue;
+    seenKey.add(key);
     deduped.push(e);
   }
 
@@ -107,6 +109,35 @@ function clusterIdOf(e: IntelligenceEvent): string | undefined {
   if (raw == null) return undefined;
   const s = String(raw).trim();
   return s.length ? s : undefined;
+}
+
+/** Chars of content folded into the source-agnostic dedup signature. */
+const DEDUP_CONTENT_CHARS = 160;
+
+/**
+ * Source-agnostic dedup key for collapsing the same real-world item:
+ *   - the cluster tag (`clusterId` / `cluster_id` / `cluster`) when present, else
+ *   - a normalized signature: `kind` + lowercased/whitespace-collapsed title +
+ *     the first ~160 chars of similarly-normalized content.
+ *
+ * Deliberately ignores `sourceId` and the upstream id so an alert ingested by
+ * overlapping feeds, or re-issued with the same wording, maps to one key. Purely
+ * a function of the event's own fields → deterministic.
+ */
+function dedupKeyOf(e: IntelligenceEvent): string {
+  const cid = clusterIdOf(e);
+  if (cid) return `c:${cid}`;
+  const title = normalizeForKey(e.title ?? '');
+  const content = normalizeForKey(e.content ?? '').slice(0, DEDUP_CONTENT_CHARS);
+  // No cluster tag and no title/content text: nothing real to match on.
+  // Treat as a singleton (unique event id) so unrelated empties never fuse.
+  if (!title && !content) return `id:${e.id}`;
+  return `s:${e.kind} ${title} ${content}`;
+}
+
+/** Lowercase, collapse whitespace, trim — the signature's normalization. */
+function normalizeForKey(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 // ---------------------------------------------------------------------------

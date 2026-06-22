@@ -5,6 +5,7 @@ import 'leaflet.markercluster';
 import Hls from 'hls.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { colors, categoryColors, rgb } from '../lib/theme.js';
+import { getAircraft, getShips, type Aircraft, type Ship } from '../lib/api.js';
 
 interface Camera {
   name: string;
@@ -496,6 +497,86 @@ function EventLayer({ events }: { events: IntelEvent[] }) {
   return null;
 }
 
+// ---- Live radar layers (ADS-B aircraft, AIS ships) ----------------------------
+// Lightweight rotated glyph markers over the dark basemap, refetched on map move.
+
+function aircraftIcon(heading: number | null, color: string) {
+  const rot = heading ?? 0;
+  // ✈ glyph points NE (~45°) by default; offset so 0° heading points north.
+  return L.divIcon({
+    className: 'radar-aircraft',
+    html: `<div style="transform:rotate(${rot - 45}deg);font-size:16px;line-height:1;color:${color};text-shadow:0 0 4px ${color},0 1px 2px #000;">✈</div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+  });
+}
+
+function shipIcon(heading: number | null, color: string) {
+  const rot = heading ?? 0;
+  // Triangle "wedge" pointing in the direction of travel (north at 0°).
+  return L.divIcon({
+    className: 'radar-ship',
+    html: `<div style="transform:rotate(${rot}deg);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:12px solid ${color};filter:drop-shadow(0 0 3px ${color});"></div>`,
+    iconSize: [10, 12],
+    iconAnchor: [5, 6],
+  });
+}
+
+function AircraftLayer({ aircraft }: { aircraft: Aircraft[] }) {
+  const map = useMap();
+  useEffect(() => {
+    const markers: L.Marker[] = [];
+    for (const a of aircraft) {
+      if (!Number.isFinite(a.lat) || !Number.isFinite(a.lon)) continue;
+      const m = L.marker([a.lat, a.lon], { icon: aircraftIcon(a.heading, colors.teal), zIndexOffset: 500 });
+      m.bindPopup(
+        `<div style="min-width:160px;">
+          <strong style="font-size:13px;">✈ ${a.callsign ?? a.id}</strong>
+          <div style="font-size:11px;color:var(--wm-dim);margin-top:4px;">${a.type ?? 'Unknown type'}</div>
+          <div style="font-size:11px;color:var(--wm-dim);margin-top:2px;">
+            ${a.alt != null ? `${a.alt.toLocaleString()} ft` : 'alt —'} ·
+            ${a.speed != null ? `${Math.round(a.speed)} kt` : 'spd —'} ·
+            ${a.heading != null ? `${Math.round(a.heading)}°` : 'hdg —'}
+          </div>
+        </div>`,
+      );
+      m.addTo(map);
+      markers.push(m);
+    }
+    return () => {
+      for (const m of markers) m.removeFrom(map);
+    };
+  }, [aircraft, map]);
+  return null;
+}
+
+function ShipLayer({ ships }: { ships: Ship[] }) {
+  const map = useMap();
+  useEffect(() => {
+    const markers: L.Marker[] = [];
+    for (const s of ships) {
+      if (!Number.isFinite(s.lat) || !Number.isFinite(s.lon)) continue;
+      const m = L.marker([s.lat, s.lon], { icon: shipIcon(s.heading, colors.low), zIndexOffset: 400 });
+      m.bindPopup(
+        `<div style="min-width:160px;">
+          <strong style="font-size:13px;">🚢 ${s.name ?? s.id}</strong>
+          <div style="font-size:11px;color:var(--wm-dim);margin-top:4px;">MMSI ${s.id}${s.type ? ` · type ${s.type}` : ''}</div>
+          <div style="font-size:11px;color:var(--wm-dim);margin-top:2px;">
+            ${s.speed != null ? `${s.speed.toFixed(1)} kt` : 'spd —'} ·
+            ${s.heading != null ? `${Math.round(s.heading)}°` : 'hdg —'}
+          </div>
+        </div>`,
+      );
+      m.addTo(map);
+      markers.push(m);
+    }
+    return () => {
+      for (const m of markers) m.removeFrom(map);
+    };
+  }, [ships, map]);
+  return null;
+}
+
 function MapFlyToListener() {
   const map = useMap();
 
@@ -714,6 +795,13 @@ export default function MapView() {
   const [showEvents, setShowEvents] = useState(true);
   const [showEventsFeed, setShowEventsFeed] = useState(true);
 
+  // Live radar layers (on-demand, refetched on map move)
+  const [showAircraft, setShowAircraft] = useState(false);
+  const [showShips, setShowShips] = useState(false);
+  const [aircraft, setAircraft] = useState<Aircraft[]>([]);
+  const [ships, setShips] = useState<Ship[]>([]);
+  const [radarLoading, setRadarLoading] = useState(false);
+
   // Fetch events + filter options once on mount
   useEffect(() => {
     let cancelled = false;
@@ -830,6 +918,41 @@ export default function MapView() {
     }, 300);
     return () => clearTimeout(id);
   }, [boundsStr, mapZoom, fetchViewport]);
+
+  // Debounced radar fetch (aircraft + ships) on map move/zoom. boundsStr is
+  // already "minLat,minLon,maxLat,maxLon" — exactly the bbox the radar API wants.
+  useEffect(() => {
+    if (!boundsStr || (!showAircraft && !showShips)) {
+      setAircraft((a) => (a.length ? [] : a));
+      setShips((s) => (s.length ? [] : s));
+      return;
+    }
+    // Radar is dense at low zoom; only query once the view is reasonably tight.
+    if (mapZoom <= 4) {
+      setAircraft((a) => (a.length ? [] : a));
+      setShips((s) => (s.length ? [] : s));
+      return;
+    }
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      setRadarLoading(true);
+      try {
+        const [ac, sh] = await Promise.all([
+          showAircraft ? getAircraft(boundsStr, 1500).catch(() => [] as Aircraft[]) : Promise.resolve([] as Aircraft[]),
+          showShips ? getShips(boundsStr, 1500).catch(() => [] as Ship[]) : Promise.resolve([] as Ship[]),
+        ]);
+        if (cancelled) return;
+        setAircraft(ac);
+        setShips(sh);
+      } finally {
+        if (!cancelled) setRadarLoading(false);
+      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [boundsStr, mapZoom, showAircraft, showShips]);
 
   // Apply filters
   const isHlsCamera = useCallback((c: Camera) => {
@@ -951,7 +1074,24 @@ export default function MapView() {
             <input type="checkbox" checked={showEvents} onChange={(e) => setShowEvents(e.target.checked)} />
             📡 Intelligence Events ({events.length.toLocaleString()})
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: colors.teal }}>
+            <input type="checkbox" checked={showAircraft} onChange={(e) => setShowAircraft(e.target.checked)} />
+            ✈ Aircraft (ADS-B){showAircraft ? ` (${aircraft.length.toLocaleString()})` : ''}
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: colors.low }}>
+            <input type="checkbox" checked={showShips} onChange={(e) => setShowShips(e.target.checked)} />
+            🚢 Ships (AIS){showShips ? ` (${ships.length.toLocaleString()})` : ''}
+          </label>
         </div>
+        {(showAircraft || showShips) && (
+          <div style={{ fontSize: 11, color: radarLoading ? colors.elevated : colors.dim }}>
+            {mapZoom <= 4
+              ? '🔍 Zoom in to load live radar'
+              : radarLoading
+                ? 'Updating live radar…'
+                : `Live radar: ${showAircraft ? `${aircraft.length} ✈` : ''}${showAircraft && showShips ? ' · ' : ''}${showShips ? `${ships.length} 🚢` : ''}`}
+          </div>
+        )}
 
         {/* Category filter */}
         <div>
@@ -1103,6 +1243,8 @@ export default function MapView() {
           <MapBoundsListener onChange={(bounds, zoom) => { setBoundsStr(bounds); setMapZoom(zoom); }} />
           <MarkerClusterLayer cameras={filtered} onCameraClick={setSelectedCamera} />
           {showEvents && <EventLayer events={events} />}
+          {showAircraft && <AircraftLayer aircraft={aircraft} />}
+          {showShips && <ShipLayer ships={ships} />}
           <MapFlyToListener />
         </MapContainer>
 

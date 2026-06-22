@@ -36,6 +36,8 @@ import { AbusechAdapter } from './abusech.js';
 import { NgaMsiAdapter } from './ngamsi.js';
 import { ReliefWebAdapter } from './reliefweb.js';
 import { GdeltAdapter } from './gdelt.js';
+import { ArxivAdapter } from './arxiv.js';
+import { NvdAdapter } from './nvd.js';
 import type { SourceAdapter, SourceKind } from '../types.js';
 
 const registry = new Map<SourceKind, SourceAdapter>();
@@ -92,3 +94,6 @@ registerAdapter(new AbusechAdapter());
 registerAdapter(new NgaMsiAdapter());
 registerAdapter(new ReliefWebAdapter());
 registerAdapter(new GdeltAdapter());
+// arXiv (Atom over the export API) + NVD CVE (JSON REST v2) — fixes the silent feeds.
+registerAdapter(new ArxivAdapter());
+registerAdapter(new NvdAdapter());

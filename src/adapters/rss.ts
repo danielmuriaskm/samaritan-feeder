@@ -1,10 +1,19 @@
 import { BaseAdapter } from './base.js';
-import type { RawEvent } from '../types.js';
+import type { RawEvent, SourceKind } from '../types.js';
 import { XMLParser } from 'fast-xml-parser';
+import { safeFetch } from '../util/safeFetch.js';
+
+// A browser-like UA. Some feeds (and feed-like JSON/XML APIs such as NVD and
+// arXiv) reject empty/default User-Agents with a 403; a real-looking UA is the
+// minimum they expect. Sent via safeFetch so the request stays SSRF-hardened.
+const BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 export class RssAdapter extends BaseAdapter {
-  readonly kind = 'rss';
-  readonly name = 'RSS/Atom Feed';
+  // Annotated with the wide types (not the narrowed literals) so subclasses such
+  // as ArxivAdapter, which reuse this adapter's Atom parsing, can override them.
+  readonly kind: SourceKind = 'rss';
+  readonly name: string = 'RSS/Atom Feed';
 
   validate(config: Record<string, unknown>): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
@@ -22,9 +31,9 @@ export class RssAdapter extends BaseAdapter {
     const maxItems = typeof config.maxItems === 'number' ? config.maxItems : 20;
     const sourceId = String(config.sourceId ?? 'rss_unknown');
 
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: {
-        'User-Agent': 'Samaritan-Feeder/0.1 (+https://github.com/danielmurias-prz/samaritan)',
+        'User-Agent': BROWSER_UA,
         Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
       },
       signal: AbortSignal.timeout(15000),
@@ -81,8 +90,9 @@ export class RssAdapter extends BaseAdapter {
     const url = String(config.url);
     const start = performance.now();
     try {
-      const res = await fetch(url, {
+      const res = await safeFetch(url, {
         method: 'HEAD',
+        headers: { 'User-Agent': BROWSER_UA },
         signal: AbortSignal.timeout(5000),
       });
       return { healthy: res.ok, latencyMs: Math.round(performance.now() - start) };
