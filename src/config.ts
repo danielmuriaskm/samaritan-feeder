@@ -41,6 +41,14 @@ const schema = z.object({
   /** Bearer token for server-to-server callers (Samaritan radar/discovery, /ingest);
    * sent as `Authorization: Bearer <token>`, bypasses the Basic console challenge. */
   FEEDER_SERVICE_TOKEN: z.string().optional(),
+  /** Shared HS256 secret with Samaritan for SSO — must equal Samaritan's SESSION_SECRET
+   * (the value it signs the /auth/sso handshake token with). Falls back to
+   * SAMARITAN_AUTH_TOKEN if unset. */
+  SESSION_SECRET: z.string().optional(),
+  /** Samaritan's SSO endpoint, e.g. https://<samaritan>/auth/sso. When set, the console
+   * redirects unauthenticated browsers there (single sign-on) instead of prompting for
+   * Basic auth; the redirect carries ?redirect=<feeder>/auth/sso/callback. */
+  SAMARITAN_SSO_URL: z.string().url().optional(),
   LLM_API_KEY: z.string().optional(),
   LLM_BASE_URL: z.string().url().optional(),
   LLM_MODEL: z.string().optional(),

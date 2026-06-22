@@ -1,6 +1,7 @@
 import type { Context, Next } from 'hono';
 import { timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
+import { ssoEnabled, readFeederSession } from '../auth/feederSession.js';
 
 /**
  * Access control for the operator console + API (app layer; pair with Fly-private
@@ -32,17 +33,29 @@ export async function authMiddleware(c: Context, next: Next): Promise<Response |
   if (path === '/health' || path.startsWith('/health') || path === '/api/health' || path.startsWith('/api/health')) {
     return next();
   }
+  // SSO handshake landing — public; it verifies the Samaritan-signed token itself.
+  if (path === '/auth/sso/callback') {
+    return next();
+  }
 
   const password = config.CONSOLE_PASSWORD;
   const serviceToken = config.FEEDER_SERVICE_TOKEN;
+  const sso = ssoEnabled();
 
   // Dev / unconfigured: allow all, warn once.
-  if (!password && !serviceToken) {
+  if (!password && !serviceToken && !sso) {
     if (!warnedOpen) {
       warnedOpen = true;
       console.warn('[auth] CONSOLE_PASSWORD and FEEDER_SERVICE_TOKEN are unset — API/console is OPEN. Set them before public exposure.');
     }
     return next();
+  }
+
+  // Single sign-on: a valid Samaritan-issued session cookie on this origin (set by the
+  // /auth/sso/callback handshake) lets a Samaritan-logged-in user in with no prompt.
+  if (sso) {
+    const session = await readFeederSession(c);
+    if (session) return next();
   }
 
   const authz = c.req.header('authorization') ?? '';
@@ -71,6 +84,19 @@ export async function authMiddleware(c: Context, next: Next): Promise<Response |
       const pass = decoded.slice(sep + 1);
       if (safeEqual(user, config.CONSOLE_USER) && safeEqual(pass, password)) return next();
     }
+  }
+
+  // Unauthenticated. With SSO on, redirect a browser page-load to Samaritan's login
+  // (single sign-on) rather than popping the Basic dialog; non-document requests get 401.
+  if (sso && config.SAMARITAN_SSO_URL) {
+    const accept = c.req.header('accept') ?? '';
+    if (c.req.method === 'GET' && accept.includes('text/html')) {
+      const origin = new URL(c.req.url).origin;
+      const cb = `${origin}/auth/sso/callback`;
+      const sep = config.SAMARITAN_SSO_URL.includes('?') ? '&' : '?';
+      return c.redirect(`${config.SAMARITAN_SSO_URL}${sep}redirect=${encodeURIComponent(cb)}`, 302);
+    }
+    return c.json({ error: 'Unauthorized' }, 401);
   }
 
   if (password) c.header('WWW-Authenticate', 'Basic realm="Samaritan Feeder Console"');
