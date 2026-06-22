@@ -9,10 +9,14 @@ process.env.SAMARITAN_AUTH_TOKEN ??= 'test-token';
 
 const {
   classifySilence,
+  silenceBudgetMs,
   detectVolumeAnomaly,
   baselineStd,
   SILENCE_INTERVAL_FACTOR,
   SILENCE_FLOOR_MS,
+  SILENCE_CADENCE_FACTOR,
+  SILENCE_BUDGET_CEILING_MS,
+  EVENT_DRIVEN_MAX_PER_HOUR,
   VOLUME_Z_THRESHOLD,
   MIN_BASELINE_SAMPLES,
 } = await import('./freshness.js');
@@ -93,6 +97,84 @@ test('never-emitted source with no failures stays healthy (warming up)', () => {
   const r = classifySilence(src({ lastEventAt: undefined }), NOW);
   assert.equal(r.silent, false);
   assert.equal(r.state, 'healthy');
+});
+
+// --- cadence-aware silence -------------------------------------------------
+
+test('cold baseline falls back to the poll-interval budget', () => {
+  // No baseline samples => behave exactly like the old fixed-threshold logic.
+  const budget = silenceBudgetMs(src({ pollIntervalSeconds: 300 }));
+  assert.equal(budget, Math.min(SILENCE_FLOOR_MS, SILENCE_BUDGET_CEILING_MS));
+  // Too-few-samples baseline is also treated as cold.
+  const cold = silenceBudgetMs(
+    src({ pollIntervalSeconds: 300, baselineMeanPerHour: 50, baselineSampleCount: MIN_BASELINE_SAMPLES - 1 }),
+  );
+  assert.equal(cold, SILENCE_FLOOR_MS);
+});
+
+test('event-driven feed (near-zero baseline) is never flagged for being quiet', () => {
+  // A significant-quake / hazard-alert feed: warm baseline, ~0 events/hour.
+  const input = src({
+    pollIntervalSeconds: 300,
+    lastEventAt: NOW - 11 * 24 * HOUR, // silent 11 days, the observed symptom
+    baselineMeanPerHour: 0, // quiet is its normal resting state
+    baselineSampleCount: 50,
+  });
+  assert.equal(silenceBudgetMs(input), SILENCE_BUDGET_CEILING_MS);
+  const r = classifySilence(input, NOW);
+  assert.equal(r.silent, false, '11d quiet on an event-driven feed is NOT silent');
+  assert.equal(r.state, 'healthy');
+});
+
+test('event-driven threshold: just under vs just over EVENT_DRIVEN_MAX_PER_HOUR', () => {
+  const under = silenceBudgetMs(
+    src({ pollIntervalSeconds: 300, baselineMeanPerHour: EVENT_DRIVEN_MAX_PER_HOUR, baselineSampleCount: 50 }),
+  );
+  assert.equal(under, SILENCE_BUDGET_CEILING_MS, 'at/below threshold => ceiling budget');
+  const over = silenceBudgetMs(
+    src({ pollIntervalSeconds: 300, baselineMeanPerHour: EVENT_DRIVEN_MAX_PER_HOUR * 2, baselineSampleCount: 50 }),
+  );
+  assert.ok(over < SILENCE_BUDGET_CEILING_MS, 'above threshold => cadence-derived, below the ceiling');
+});
+
+test('busy feed that stalls is caught at a few of its OWN intervals', () => {
+  // 10 events/hour => expected gap 6min => budget = 6min * factor. Idle 1h >> that.
+  const input = src({
+    pollIntervalSeconds: 30,
+    lastEventAt: NOW - 1 * HOUR,
+    baselineMeanPerHour: 10,
+    baselineSampleCount: 50,
+  });
+  // cadence budget (6min*4=24min) is below the interval floor (6h), so the floor
+  // dominates and a busy feed idle 1h is still healthy — we never flag faster than
+  // we'd notice. But idle 7h (past the 6h floor) trips silent.
+  assert.equal(classifySilence(input, NOW).silent, false);
+  const stalled = classifySilence({ ...input, lastEventAt: NOW - 7 * HOUR }, NOW);
+  assert.equal(stalled.silent, true);
+  assert.equal(stalled.state, 'silent');
+});
+
+test('moderate-cadence feed: budget scales with its measured rhythm', () => {
+  // 0.5 events/hour => expected gap 2h => budget = 2h * SILENCE_CADENCE_FACTOR.
+  const expectedGapMs = (1 / 0.5) * HOUR;
+  const expected = Math.min(
+    Math.max(expectedGapMs * SILENCE_CADENCE_FACTOR, SILENCE_FLOOR_MS),
+    SILENCE_BUDGET_CEILING_MS,
+  );
+  const budget = silenceBudgetMs(
+    src({ pollIntervalSeconds: 300, baselineMeanPerHour: 0.5, baselineSampleCount: 50 }),
+  );
+  assert.equal(budget, expected);
+});
+
+test('cadence budget is clamped to the ceiling', () => {
+  // A very rare (but not event-driven) feed: 0.06/h => gap ~16.7h => *4 ~ 66h,
+  // still under the 14d ceiling, so not clamped. Push lower to hit the ceiling.
+  const budget = silenceBudgetMs(
+    src({ pollIntervalSeconds: 300, baselineMeanPerHour: 0.06, baselineSampleCount: 50 }),
+  );
+  assert.ok(budget <= SILENCE_BUDGET_CEILING_MS);
+  assert.ok(budget > SILENCE_FLOOR_MS, 'a rare-but-active feed gets more than the 6h floor');
 });
 
 // --- detectVolumeAnomaly ---------------------------------------------------

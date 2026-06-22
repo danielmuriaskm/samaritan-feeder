@@ -20,6 +20,7 @@ const TIER_BY_KIND: Record<SourceKind, SourceTier> = {
   // Tier 1 — authoritative / instrument
   usgs: 1, eonet: 1, gdacs: 1, nws: 1, reliefweb: 1, ngamsi: 1, stix: 1,
   shodan: 1, censys: 1, crtsh: 1, virustotal: 1, hibp: 1, greynoise: 1, urlscan: 1, abusech: 1,
+  nvd: 1, // NIST NVD — authoritative CVE feed
   // Tier 2 — established editorial / direct observation
   rss: 2, news_api: 2, gdelt: 2, hn: 2, arxiv: 2, github: 2, youtube: 2,
   webcam: 2, traffic_cam: 2, weather_cam: 2, ip_camera: 2, windy: 2,

@@ -43,6 +43,22 @@ test('orderAndCap dedups by cluster keeping the highest-scored member', () => {
   assert.deepEqual(ids, ['b', 'c', 'd']); // 'a' collapsed into 'b'; ordered by score
 });
 
+test('orderAndCap collapses the same alert across overlapping feeds (no cluster tag)', () => {
+  // Same real-world NWS alert ingested by two feeds (different sourceId/id) and
+  // re-issued once — identical kind+title+content but no clusterId tag. Should
+  // collapse to ONE representative (highest score) despite differing source/id.
+  const title = 'NWS Severe Flood Warning';
+  const content = 'Flood Warning issued for Some County. Severity: Severe. Move to higher ground.';
+  const events = [
+    ev({ id: 'tornado-feed', sourceId: 'seed-nws-tornado', score: 0.7, title, content }),
+    ev({ id: 'severe-feed', sourceId: 'seed-nws-severe', score: 0.9, title, content }), // strongest
+    ev({ id: 'reissue', sourceId: 'seed-nws-severe', score: 0.6, title, content }),
+    ev({ id: 'other', sourceId: 'seed-nws-severe', score: 0.5, title: 'Different Heat Advisory', content: 'Heat.' }),
+  ];
+  const out = orderAndCap(events, { maxPerSource: 10 });
+  assert.deepEqual(out.map((e) => e.id), ['severe-feed', 'other']);
+});
+
 test('orderAndCap caps per source', () => {
   const events = [
     ev({ id: '1', sourceId: 's', score: 0.9 }),

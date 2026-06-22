@@ -70,7 +70,7 @@ const createSchema = z.object({
     'shodan', 'censys', 'crtsh', 'virustotal', 'hibp',
     'webcrawl', 'twitter_scrape', 'reddit_scrape', 'sherlock',
     'urlscan', 'pastebin', 'gist',
-    'darksearch', 'greynoise', 'stix',
+    'darksearch', 'greynoise', 'stix', 'nvd',
   ]),
   name: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),

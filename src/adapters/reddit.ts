@@ -1,5 +1,15 @@
 import { BaseAdapter } from './base.js';
 import type { RawEvent } from '../types.js';
+import { safeFetch } from '../util/safeFetch.js';
+
+// Reddit blocks empty/default User-Agents and (increasingly) datacenter IPs with
+// a 403. A real browser-like UA is the minimum Reddit's public JSON endpoint
+// expects; sending it via safeFetch keeps the request SSRF-hardened. From an
+// IP Reddit has decided to block, even this UA gets a 403 — that case is handled
+// by failing gracefully (return []) rather than throwing, so the source is not
+// repeatedly tripped into a "failing" breaker and the logs aren't spammed.
+const BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 export class RedditAdapter extends BaseAdapter {
   readonly kind = 'reddit';
@@ -24,19 +34,36 @@ export class RedditAdapter extends BaseAdapter {
     const since = cursor ? Number(cursor) : 0;
 
     const url = `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/${sort}.json?limit=${maxItems}`;
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: {
-        'User-Agent': 'Samaritan-Feeder/0.1 (+https://github.com/danielmurias-prz/samaritan)',
+        'User-Agent': BROWSER_UA,
         Accept: 'application/json',
       },
       signal: AbortSignal.timeout(15000),
     });
 
     if (!res.ok) {
+      // Reddit soft-blocks datacenter IPs with 403/429 regardless of UA. Treat a
+      // block as "no new items this cycle" instead of an error: returning [] keeps
+      // the source healthy-but-quiet (the cadence-aware silence detector tolerates
+      // a Tier-3 social feed that is legitimately blocked) and avoids error spam.
+      if (res.status === 403 || res.status === 429) {
+        console.warn(
+          `[reddit] r/${subreddit} blocked (${res.status} ${res.statusText}); skipping this cycle`,
+        );
+        return [];
+      }
       throw new Error(`Reddit fetch failed: ${res.status} ${res.statusText}`);
     }
 
-    const json = (await res.json()) as { data?: { children?: Array<{ data?: RedditPost }> } };
+    let json: { data?: { children?: Array<{ data?: RedditPost }> } };
+    try {
+      json = (await res.json()) as { data?: { children?: Array<{ data?: RedditPost }> } };
+    } catch {
+      // A 200 with an HTML interstitial (another shape of soft-block) — not JSON.
+      console.warn(`[reddit] r/${subreddit} returned non-JSON (soft-block); skipping this cycle`);
+      return [];
+    }
     const posts = json.data?.children ?? [];
 
     const events: RawEvent[] = [];
@@ -79,8 +106,8 @@ export class RedditAdapter extends BaseAdapter {
     const url = `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/about.json`;
     const start = performance.now();
     try {
-      const res = await fetch(url, {
-        headers: { 'User-Agent': 'Samaritan-Feeder/0.1' },
+      const res = await safeFetch(url, {
+        headers: { 'User-Agent': BROWSER_UA },
         signal: AbortSignal.timeout(5000),
       });
       return { healthy: res.ok, latencyMs: Math.round(performance.now() - start) };

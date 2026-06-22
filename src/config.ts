@@ -61,6 +61,9 @@ const schema = z.object({
   RAW_DATA_RETENTION_DAYS: z.coerce.number().default(7),
   WINDY_API_KEY: z.string().optional(),
   WINDY_API_KEY2: z.string().optional(),
+  /** Live AIS ship radar (aisstream.io). When unset, the /radar/ships layer
+   * returns [] — aircraft + camera radar layers still work key-free. */
+  AISSTREAM_API_KEY: z.string().optional(),
   SHODAN_API_KEY: z.string().optional(),
   CENSYS_API_ID: z.string().optional(),
   CENSYS_API_SECRET: z.string().optional(),

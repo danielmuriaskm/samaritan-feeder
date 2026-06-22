@@ -36,6 +36,29 @@ export const SILENCE_INTERVAL_FACTOR = 12;
 // any source regardless of how often we poll it.
 export const SILENCE_FLOOR_MS = 6 * 60 * 60 * 1000;
 
+// How many of a source's OWN historical inter-event gaps it may miss before we
+// call it silent. A source that historically emits every ~2h is silent after
+// ~8h of nothing; one that emits every ~6h is silent after ~24h. This is the
+// cadence-aware core: the budget tracks each feed's measured rhythm rather than
+// one global threshold, so a busy feed is caught fast while a slow one isn't
+// falsely flagged.
+export const SILENCE_CADENCE_FACTOR = 4;
+
+// Ceiling on the cadence-derived budget. Without a cap, an event-driven source
+// (hazard alert, significant-quake feed) whose historical volume rounds to ~0
+// events/hour would get an unbounded budget and could never be flagged even if
+// it truly broke. 14 days is long enough that we never cry wolf on a feed that
+// legitimately fires only a few times a month, yet still surfaces a genuinely
+// dead one eventually.
+export const SILENCE_BUDGET_CEILING_MS = 14 * 24 * 60 * 60 * 1000;
+
+// A source whose historical per-hour volume is at or below this is treated as
+// EVENT-DRIVEN (alerts/advisories that only emit on a real event): NWS, SWPC,
+// Met Office, TfL, significant-quake feeds. Such a source is never flagged
+// silent purely for being quiet — silence is its normal resting state. We still
+// honor a genuine stall via the ceiling above once a baseline exists.
+export const EVENT_DRIVEN_MAX_PER_HOUR = 0.05; // ~<= 1 event per ~20h on average
+
 // z-score past which a per-hour volume reading counts as anomalous vs baseline.
 export const VOLUME_Z_THRESHOLD = 3;
 
@@ -52,6 +75,21 @@ export interface SilenceInput {
   consecutiveFailures?: number;
   /** breaker cooldown end (ms). When in the future the source is in cooldown. */
   cooldownUntil?: number;
+  /**
+   * The source's historical mean event volume in events/hour, from the online
+   * `source_volume_baseline` (undefined until the baseline is warm). This is what
+   * makes silence cadence-aware: a feed that historically produces N events/hour
+   * has an expected inter-event gap of ~1/N hours, and we budget a few of those
+   * gaps before calling it silent. A near-zero baseline marks an EVENT-DRIVEN
+   * source whose quiet is normal, not a fault.
+   */
+  baselineMeanPerHour?: number;
+  /**
+   * Number of samples behind `baselineMeanPerHour`. Below MIN_BASELINE_SAMPLES the
+   * baseline is too cold to trust as a cadence estimate, so we fall back to the
+   * poll-interval budget. (Same warm-up gate the volume anomaly path uses.)
+   */
+  baselineSampleCount?: number;
 }
 
 export interface SilenceResult {
@@ -61,12 +99,64 @@ export interface SilenceResult {
 }
 
 /**
+ * Compute how long a source may stay silent before it's suspicious — relative to
+ * its OWN observed cadence (pure).
+ *
+ * Two regimes:
+ *   1. Cold baseline (too few samples, or no baseline yet): fall back to the
+ *      poll-interval budget — a multiple of the poll cadence, floored at 6h. This
+ *      is the original behavior and the right default for a feed we haven't
+ *      profiled yet.
+ *   2. Warm baseline: derive the budget from the source's measured event rhythm.
+ *      A source emitting `mean` events/hour has an expected inter-event gap of
+ *      `1/mean` hours; we allow SILENCE_CADENCE_FACTOR of those gaps. An
+ *      event-driven source (mean ~0) gets the ceiling, so it is effectively never
+ *      flagged for being quiet, while a busy feed that suddenly stops is caught at
+ *      a few of its own intervals.
+ *
+ * The result is always at least the poll-interval budget (we never flag faster
+ * than we'd notice anyway) and never more than SILENCE_BUDGET_CEILING_MS.
+ */
+export function silenceBudgetMs(src: SilenceInput): number {
+  const intervalMs = Math.max(1, src.pollIntervalSeconds) * 1000;
+  const intervalBudget = Math.max(intervalMs * SILENCE_INTERVAL_FACTOR, SILENCE_FLOOR_MS);
+
+  const mean = src.baselineMeanPerHour;
+  const samples = src.baselineSampleCount ?? 0;
+  const baselineWarm = typeof mean === 'number' && Number.isFinite(mean) && samples >= MIN_BASELINE_SAMPLES;
+
+  if (!baselineWarm) {
+    // Unprofiled source — use the poll-interval budget (never exceed the ceiling).
+    return Math.min(intervalBudget, SILENCE_BUDGET_CEILING_MS);
+  }
+
+  // Event-driven (quiet is normal): give it the full ceiling so a low-frequency
+  // alert feed is not flagged just for resting between real events.
+  if (mean! <= EVENT_DRIVEN_MAX_PER_HOUR) {
+    return SILENCE_BUDGET_CEILING_MS;
+  }
+
+  // expected gap (ms) between events at the historical rate, times the factor.
+  const expectedGapMs = (1 / mean!) * 60 * 60 * 1000;
+  const cadenceBudget = expectedGapMs * SILENCE_CADENCE_FACTOR;
+
+  // Take the larger of the cadence- and interval-derived budgets so we never flag
+  // a source before we'd even have had a chance to poll it a few times; clamp to
+  // the ceiling so a genuinely dead feed is still surfaced eventually.
+  return Math.min(Math.max(cadenceBudget, intervalBudget), SILENCE_BUDGET_CEILING_MS);
+}
+
+/**
  * Classify a source's liveness from timing alone (pure).
  *
  * Precedence: an open circuit breaker (cooldown) and active failures take priority
  * over silence — a failing/cooling source is a *different* problem than a silently
  * dead one. "Silent" is reserved for the insidious case the feeder used to miss:
  * polls return OK, the source just stops producing.
+ *
+ * Silence is judged against a CADENCE-AWARE budget (see {@link silenceBudgetMs}),
+ * so an event-driven / low-frequency feed (hazard alerts, significant quakes) is
+ * not flagged merely for being quiet, while a normally-busy feed that stalls is.
  */
 export function classifySilence(src: SilenceInput, now: number): SilenceResult {
   // In an open breaker window => cooldown, regardless of timing.
@@ -87,8 +177,7 @@ export function classifySilence(src: SilenceInput, now: number): SilenceResult {
     return { state: 'healthy', silent: false };
   }
 
-  const intervalMs = Math.max(1, src.pollIntervalSeconds) * 1000;
-  const silenceBudget = Math.max(intervalMs * SILENCE_INTERVAL_FACTOR, SILENCE_FLOOR_MS);
+  const silenceBudget = silenceBudgetMs(src);
   const idleMs = now - src.lastEventAt;
 
   if (idleMs > silenceBudget) {
@@ -193,13 +282,21 @@ async function sweepSource(
   // so the current reading is scored against history, not against itself.
   await updateBaseline(source.id, perHour, now);
 
-  // --- liveness classification ---
+  // --- liveness classification (cadence-aware) ---
+  // Feed the source's OWN historical volume baseline into the classifier so the
+  // silence budget tracks each feed's measured rhythm: a busy feed that stalls is
+  // caught quickly, while an event-driven / low-frequency feed (hazard alerts,
+  // significant quakes) is not flagged merely for being quiet. We use the PRIOR
+  // baseline (snapshotted before folding in this reading above) for the same
+  // reason the anomaly path does — score against history, not against itself.
   const { state, silent } = classifySilence(
     {
       lastEventAt: source.lastEventAt,
       pollIntervalSeconds: source.pollIntervalSeconds,
       consecutiveFailures: source.consecutiveFailures,
       cooldownUntil: source.cooldownUntil,
+      baselineMeanPerHour: priorBaseline ? priorMean : undefined,
+      baselineSampleCount: priorSamples,
     },
     now,
   );
@@ -228,7 +325,19 @@ async function sweepSource(
             : 'Polls succeed but the source has never produced an event.',
         sourceIds: [source.id],
         dedupeKey,
-        metadata: { healthState: state, idleMs, pollIntervalSeconds: source.pollIntervalSeconds },
+        metadata: {
+          healthState: state,
+          idleMs,
+          pollIntervalSeconds: source.pollIntervalSeconds,
+          baselineMeanPerHour: priorBaseline ? priorMean : undefined,
+          baselineSampleCount: priorSamples,
+          silenceBudgetMs: silenceBudgetMs({
+            lastEventAt: source.lastEventAt,
+            pollIntervalSeconds: source.pollIntervalSeconds,
+            baselineMeanPerHour: priorBaseline ? priorMean : undefined,
+            baselineSampleCount: priorSamples,
+          }),
+        },
       };
       const stored = await insertSignal(sig);
       bus.emitSignal(stored);
