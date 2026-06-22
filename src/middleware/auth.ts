@@ -47,9 +47,14 @@ export async function authMiddleware(c: Context, next: Next): Promise<Response |
 
   const authz = c.req.header('authorization') ?? '';
 
-  // Server-to-server bearer token.
-  if (serviceToken && authz.startsWith('Bearer ')) {
-    if (safeEqual(authz.slice(7).trim(), serviceToken)) return next();
+  // Server-to-server auth, compared to FEEDER_SERVICE_TOKEN. Accept BOTH:
+  //  - `Authorization: Bearer <token>`
+  //  - `x-feeder-api-key: <token>`  ← Samaritan's intelligence client sends this
+  //    (apps/server/src/intelligence/client.ts), so radar/discovery authenticate.
+  if (serviceToken) {
+    if (authz.startsWith('Bearer ') && safeEqual(authz.slice(7).trim(), serviceToken)) return next();
+    const apiKey = c.req.header('x-feeder-api-key');
+    if (apiKey && safeEqual(apiKey.trim(), serviceToken)) return next();
   }
 
   // Operator console Basic auth.
