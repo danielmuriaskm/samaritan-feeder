@@ -192,6 +192,33 @@ export function makeDedupeHash(sourceId: string, content: string): string {
   return createHash('sha256').update(`${sourceId}:${content}`).digest('hex').slice(0, 32);
 }
 
+// In-process dedupe reservation. dedupeExists() (a DB read) and createEvent() (the
+// insert) are separated by a long async pipeline (content filter → LLM enrich →
+// MITRE → embed), so within ONE poll the same item can pass the existence check
+// 2-3x concurrently and then all insert — the cause of the duplicate events. This
+// synchronous reserve-before-enrich guard closes that window for the single feeder
+// process (deployment is single-machine by design — multi-machine would double-poll
+// anyway). Reservations expire so a genuinely new re-emit after the window is still
+// allowed; by then the committed row is caught by dedupeExists() / the DB unique index.
+const reservedDedupe = new Map<string, number>();
+const DEDUPE_RESERVE_TTL_MS = 5 * 60 * 1000;
+
+export function reserveDedupe(hash: string, now: number = Date.now()): boolean {
+  const exp = reservedDedupe.get(hash);
+  if (exp !== undefined && exp > now) return false; // already in-flight this window
+  if (reservedDedupe.size > 5000) {
+    for (const [h, e] of reservedDedupe) if (e <= now) reservedDedupe.delete(h);
+  }
+  reservedDedupe.set(hash, now + DEDUPE_RESERVE_TTL_MS);
+  return true;
+}
+
+/** True for a Postgres unique-constraint violation (SQLSTATE 23505) — i.e. a
+ * concurrent insert won the race and the dedupe-hash unique index rejected this dup. */
+export function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505';
+}
+
 function fromRow(row: Record<string, unknown>): IntelligenceEvent {
   return {
     id: String(row.id),

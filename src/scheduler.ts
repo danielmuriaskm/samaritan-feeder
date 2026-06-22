@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { listSources, updateSource, recordPollSuccess, recordPollFailure } from './store/sources.js';
-import { createEvent, dedupeExists, makeDedupeHash, deleteOldEvents } from './store/events.js';
+import { createEvent, dedupeExists, makeDedupeHash, deleteOldEvents, reserveDedupe, isUniqueViolation } from './store/events.js';
 import { bus } from './bus.js';
 import { computeScore } from './scoring/score.js';
 import { trustForKind } from './scoring/sourceTrust.js';
@@ -202,6 +202,12 @@ async function ingestRawEvent(sourceId: string, raw: RawEvent, sourceKind?: Sour
   if (await dedupeExists(dedupeHash)) {
     return;
   }
+  // Close the dedupeExists()→createEvent() race: the two are separated by the long
+  // enrichment pipeline below, so concurrent same-hash items in one poll would all
+  // pass the check above and all insert. Reserve the hash synchronously here.
+  if (!reserveDedupe(dedupeHash)) {
+    return;
+  }
 
   // Content filtering
   const filterResult = filterContent(raw.title ?? '', raw.content);
@@ -313,7 +319,15 @@ async function ingestRawEvent(sourceId: string, raw: RawEvent, sourceKind?: Sour
     }
   }
 
-  await createEvent(event);
+  try {
+    await createEvent(event);
+  } catch (err) {
+    // A concurrent insert won the race and the dedupe-hash unique index (migration
+    // 007) rejected this duplicate — drop it silently rather than surface an error
+    // and never emit it onto the live bus or run downstream enrichment for a dup.
+    if (isUniqueViolation(err)) return;
+    throw err;
+  }
   await updateSource(sourceId, { lastEventAt: Date.now() });
 
   // Live spine: notify in-process consumers (SSE clients, dashboard, correlation).
