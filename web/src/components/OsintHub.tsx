@@ -77,21 +77,19 @@ export default function OsintHub() {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100%', background: '#f8fafc' }}>
+    <div style={{ display: 'flex', height: '100%', background: 'var(--wm-base)' }}>
       {/* Sidebar */}
-      <div style={{ width: 280, padding: 20, background: '#fff', borderRight: '1px solid #e2e8f0', overflow: 'auto' }}>
-        <h2 style={{ margin: '0 0 16px', fontSize: 18, color: '#1e293b' }}>🧰 OSINT Tools</h2>
+      <div style={{ width: 280, padding: 20, background: 'var(--wm-panel)', borderRight: '1px solid var(--wm-border)', overflow: 'auto' }}>
+        <h2 style={{ margin: '0 0 16px', fontSize: 18, color: 'var(--wm-text)' }}>🧰 OSINT Tools</h2>
 
         <input
+          className="wm-input"
           type="text"
           placeholder="Search tools..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{
             width: '100%',
-            padding: '8px 12px',
-            borderRadius: 6,
-            border: '1px solid #e2e8f0',
             marginBottom: 12,
             fontSize: 13,
           }}
@@ -104,10 +102,11 @@ export default function OsintHub() {
               onClick={() => setSelectedCategory(cat)}
               style={{
                 padding: '6px 10px',
-                borderRadius: 4,
-                border: 'none',
-                background: selectedCategory === cat ? '#e0e7ff' : 'transparent',
-                color: selectedCategory === cat ? '#4338ca' : '#475569',
+                borderRadius: 3,
+                border: '1px solid',
+                borderColor: selectedCategory === cat ? 'var(--wm-accent)' : 'transparent',
+                background: selectedCategory === cat ? 'var(--wm-hover)' : 'transparent',
+                color: selectedCategory === cat ? 'var(--wm-accent)' : 'var(--wm-dim)',
                 textAlign: 'left',
                 cursor: 'pointer',
                 fontSize: 13,
@@ -120,30 +119,27 @@ export default function OsintHub() {
         </div>
 
         {selectedTool && (
-          <div style={{ marginTop: 20, padding: 14, background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <h3 style={{ margin: '0 0 8px', fontSize: 14, color: '#1e293b' }}>{selectedTool.name}</h3>
-            <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>{selectedTool.description}</p>
+          <div className="wm-card" style={{ marginTop: 20, padding: 14 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 14, color: 'var(--wm-text)' }}>{selectedTool.name}</h3>
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--wm-dim)' }}>{selectedTool.description}</p>
             <input
+              className="wm-input"
               type="text"
               placeholder="Enter query..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              style={{ width: '100%', padding: '6px 8px', borderRadius: 4, border: '1px solid #e2e8f0', marginBottom: 8, fontSize: 12 }}
+              style={{ width: '100%', marginBottom: 8, fontSize: 12 }}
             />
             <a
+              className="wm-btn wm-btn--primary"
               href={launchUrl(selectedTool, query)}
               target="_blank"
               rel="noopener noreferrer"
               style={{
                 display: 'block',
                 textAlign: 'center',
-                padding: '8px',
-                background: '#3b82f6',
-                color: '#fff',
-                borderRadius: 4,
                 textDecoration: 'none',
                 fontSize: 12,
-                fontWeight: 600,
               }}
             >
               🚀 Launch
@@ -168,36 +164,38 @@ export default function OsintHub() {
             >
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: CATEGORY_COLORS[category] || '#64748b', display: 'inline-block' }} />
               {CATEGORIES[category] || category}
-              <span style={{ color: '#94a3b8', fontWeight: 400, fontSize: 12 }}>({catTools.length})</span>
+              <span style={{ color: 'var(--wm-muted)', fontWeight: 400, fontSize: 12 }}>({catTools.length})</span>
             </h3>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
-              {catTools.map((tool) => (
-                <button
-                  key={tool.name}
-                  onClick={() => {
-                    setSelectedTool(tool);
-                    setQuery('');
-                  }}
-                  style={{
-                    padding: 14,
-                    background: selectedTool?.name === tool.name ? '#eff6ff' : '#fff',
-                    border: selectedTool?.name === tool.name ? '2px solid #3b82f6' : '1px solid #e2e8f0',
-                    borderRadius: 8,
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: 13, color: '#1e293b', marginBottom: 4 }}>{tool.name}</div>
-                  <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.4 }}>{tool.description}</div>
-                </button>
-              ))}
+              {catTools.map((tool) => {
+                const selected = selectedTool?.name === tool.name;
+                return (
+                  <button
+                    key={tool.name}
+                    className="wm-card wm-card--hover"
+                    onClick={() => {
+                      setSelectedTool(tool);
+                      setQuery('');
+                    }}
+                    style={{
+                      padding: 14,
+                      background: selected ? 'var(--wm-hover)' : undefined,
+                      borderColor: selected ? 'var(--wm-accent)' : undefined,
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--wm-text)', marginBottom: 4 }}>{tool.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--wm-dim)', lineHeight: 1.4 }}>{tool.description}</div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}
 
         {filtered.length === 0 && (
-          <div style={{ textAlign: 'center', padding: 60, color: '#94a3b8' }}>
+          <div style={{ textAlign: 'center', padding: 60, color: 'var(--wm-muted)' }}>
             No tools match your search.
           </div>
         )}

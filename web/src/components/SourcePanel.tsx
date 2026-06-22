@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
+import { colors, rgb } from '../lib/theme.js';
 
 interface Source {
   id: string;
@@ -166,10 +167,10 @@ const SOURCE_KINDS: SourceKindDef[] = [
 
 const CATEGORY_ORDER = ['Social & News', 'OSINT', 'Cameras & Geo', 'Data'];
 const CATEGORY_COLORS: Record<string, string> = {
-  'Social & News': '#6366f1',
-  'OSINT': '#ef4444',
-  'Cameras & Geo': '#22c55e',
-  'Data': '#3b82f6',
+  'Social & News': colors.purple,
+  'OSINT': colors.critical,
+  'Cameras & Geo': colors.normal,
+  'Data': colors.info,
 };
 
 const kindIcons: Record<string, string> = {
@@ -189,10 +190,10 @@ function getHealthStatus(source: Source): 'healthy' | 'warning' | 'critical' | '
 }
 
 const HEALTH_DOT: Record<string, string> = {
-  healthy: '#22c55e',
-  warning: '#f59e0b',
-  critical: '#ef4444',
-  disabled: '#94a3b8',
+  healthy: colors.live,
+  warning: colors.elevated,
+  critical: colors.critical,
+  disabled: colors.muted,
 };
 
 export default function SourcePanel() {
@@ -404,17 +405,14 @@ export default function SourcePanel() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Sub-nav */}
-      <div style={{ display: 'flex', gap: 8, padding: '12px 20px', borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
+      <div style={{ display: 'flex', gap: 8, padding: '0 20px', borderBottom: '1px solid var(--wm-border)' }}>
         {([
           { key: 'sources' as Tab, label: 'Sources', count: sources.length },
           { key: 'add' as Tab, label: 'Add Source', count: null },
           { key: 'libraries' as Tab, label: 'Libraries', count: null },
         ]).map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)} style={{
-            padding: '6px 16px', borderRadius: 6, border: 'none',
-            background: tab === t.key ? '#111' : 'transparent', color: tab === t.key ? '#fff' : '#374151',
-            cursor: 'pointer', fontSize: 14, fontWeight: 500,
-          }}>
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`wm-tab${tab === t.key ? ' wm-tab--active' : ''}`}>
             {t.label} {t.count !== null && `(${t.count})`}
           </button>
         ))}
@@ -425,16 +423,14 @@ export default function SourcePanel() {
         <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
           {/* Filters + Bulk */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-            <input type="text" placeholder="Search sources..." value={search}
+            <input className="wm-input" type="text" placeholder="Search sources..." value={search}
               onChange={(e) => setSearch(e.target.value)}
-              style={{ flex: 1, minWidth: 180, padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }} />
-            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }}>
+              style={{ flex: 1, minWidth: 180 }} />
+            <select className="wm-select" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
               <option value="">All categories</option>
               {CATEGORY_ORDER.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }}>
+            <select className="wm-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All status</option>
               <option value="healthy">Healthy</option>
               <option value="warning">Warning</option>
@@ -442,8 +438,7 @@ export default function SourcePanel() {
               <option value="disabled">Disabled</option>
             </select>
             {(search || categoryFilter || statusFilter) && (
-              <button onClick={() => { setSearch(''); setCategoryFilter(''); setStatusFilter(''); }}
-                style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #d1d5db', background: '#f3f4f6', cursor: 'pointer', fontSize: 13 }}>
+              <button className="wm-btn" onClick={() => { setSearch(''); setCategoryFilter(''); setStatusFilter(''); }}>
                 Clear
               </button>
             )}
@@ -451,15 +446,15 @@ export default function SourcePanel() {
 
           {/* Bulk actions */}
           {selectedSources.size > 0 && (
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12, padding: '8px 12px', background: '#eff6ff', borderRadius: 6, alignItems: 'center' }}>
-              <span style={{ fontSize: 13, color: '#1e40af', fontWeight: 500 }}>{selectedSources.size} selected</span>
-              <button onClick={() => bulkToggle(true)} style={{ padding: '4px 10px', borderRadius: 4, border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: 12 }}>Enable</button>
-              <button onClick={() => bulkToggle(false)} style={{ padding: '4px 10px', borderRadius: 4, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: 12 }}>Disable</button>
-              <button onClick={bulkDelete} style={{ padding: '4px 10px', borderRadius: 4, border: 'none', background: '#ef4444', color: '#fff', cursor: 'pointer', fontSize: 12 }}>Delete</button>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, padding: '8px 12px', background: `rgba(${rgb(colors.info)}, 0.12)`, borderRadius: 3, alignItems: 'center' }}>
+              <span style={{ fontSize: 13, color: colors.info, fontWeight: 500 }}>{selectedSources.size} selected</span>
+              <button onClick={() => bulkToggle(true)} style={{ padding: '4px 10px', borderRadius: 3, border: 'none', background: colors.normal, color: '#0a0a0a', cursor: 'pointer', fontSize: 12 }}>Enable</button>
+              <button onClick={() => bulkToggle(false)} style={{ padding: '4px 10px', borderRadius: 3, border: 'none', background: colors.elevated, color: '#0a0a0a', cursor: 'pointer', fontSize: 12 }}>Disable</button>
+              <button onClick={bulkDelete} style={{ padding: '4px 10px', borderRadius: 3, border: 'none', background: colors.critical, color: '#0a0a0a', cursor: 'pointer', fontSize: 12 }}>Delete</button>
             </div>
           )}
 
-          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ fontSize: 13, color: 'var(--wm-dim)', marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
               <input type="checkbox" checked={filteredSources.length > 0 && filteredSources.every((s) => selectedSources.has(s.id))}
                 onChange={toggleSelectAll} />
@@ -469,11 +464,11 @@ export default function SourcePanel() {
             <span>·</span>
             <span>{sources.filter((s) => s.enabled).length} enabled</span>
             <span>·</span>
-            <span style={{ color: '#ef4444' }}>{sources.filter((s) => s.errorCount > 0).length} with errors</span>
+            <span style={{ color: colors.critical }}>{sources.filter((s) => s.errorCount > 0).length} with errors</span>
           </div>
 
           {loading ? (
-            <div style={{ color: '#6b7280', padding: 40 }}>Loading sources...</div>
+            <div style={{ color: 'var(--wm-dim)', padding: 40 }}>Loading sources...</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {CATEGORY_ORDER.map((cat) => {
@@ -482,54 +477,52 @@ export default function SourcePanel() {
                 return (
                   <div key={cat}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: CATEGORY_COLORS[cat] || '#64748b' }} />
-                      <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: 0.5 }}>{cat}</h3>
-                      <span style={{ fontSize: 12, color: '#9ca3af' }}>({catSources.length})</span>
+                      <span className="wm-dot" style={{ background: CATEGORY_COLORS[cat] || colors.dim }} />
+                      <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: 'var(--wm-text-2)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{cat}</h3>
+                      <span style={{ fontSize: 12, color: 'var(--wm-muted)' }}>({catSources.length})</span>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {catSources.map((source) => {
                         const health = getHealthStatus(source);
+                        const isSelected = selectedSources.has(source.id);
                         return (
-                          <div key={source.id} style={{
+                          <div key={source.id} className="wm-card" style={{
                             display: 'flex', alignItems: 'center', gap: 10,
-                            padding: '10px 14px', borderRadius: 8, border: '1px solid #e5e7eb',
-                            background: selectedSources.has(source.id) ? '#eff6ff' : '#fff',
+                            padding: '10px 14px',
+                            background: isSelected ? `rgba(${rgb(colors.info)}, 0.12)` : undefined,
+                            borderColor: isSelected ? colors.info : undefined,
                           }}>
-                            <input type="checkbox" checked={selectedSources.has(source.id)} onChange={() => toggleSelect(source.id)} />
-                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: HEALTH_DOT[health] }} title={health} />
+                            <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(source.id)} />
+                            <div className="wm-dot" style={{ background: HEALTH_DOT[health] }} title={health} />
                             <div style={{ fontSize: 18 }}>{kindIcons[source.kind] ?? '📡'}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, fontSize: 14, color: source.enabled ? '#1e293b' : '#9ca3af' }}>{source.name}</div>
-                              <div style={{ fontSize: 11, color: '#6b7280', display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+                              <div style={{ fontWeight: 600, fontSize: 14, color: source.enabled ? 'var(--wm-text)' : 'var(--wm-muted)' }}>{source.name}</div>
+                              <div className="wm-meta" style={{ fontSize: 11, display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
                                 <span style={{ textTransform: 'capitalize' }}>{source.kind.replace(/_/g, ' ')}</span>
                                 <span>·</span>
                                 <span>poll {source.pollIntervalSeconds}s</span>
                                 <span>·</span>
                                 <span>last: {source.lastPolledAt ? new Date(source.lastPolledAt).toLocaleTimeString() : 'never'}</span>
                                 {source.lastEventAt && <span>· event: {new Date(source.lastEventAt).toLocaleTimeString()}</span>}
-                                {source.errorCount > 0 && <span style={{ color: '#ef4444' }}>· ⚠️ {source.errorCount} errors</span>}
+                                {source.errorCount > 0 && <span style={{ color: colors.critical }}>· ⚠️ {source.errorCount} errors</span>}
                               </div>
                               {source.lastError && (
-                                <div style={{ fontSize: 10, color: '#ef4444', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                <div style={{ fontSize: 10, color: colors.critical, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                   {source.lastError}
                                 </div>
                               )}
                             </div>
                             <div style={{ display: 'flex', gap: 6 }}>
                               <button onClick={() => toggleSource(source.id, source.enabled)} style={{
-                                padding: '5px 12px', borderRadius: 6, border: 'none',
-                                background: source.enabled ? '#22c55e' : '#9ca3af', color: '#fff', cursor: 'pointer', fontSize: 12,
+                                padding: '5px 12px', borderRadius: 3, border: 'none',
+                                background: source.enabled ? colors.normal : colors.muted, color: '#0a0a0a', cursor: 'pointer', fontSize: 12,
                               }}>
                                 {source.enabled ? 'On' : 'Off'}
                               </button>
-                              <button onClick={() => setEditingSource(source)} style={{
-                                padding: '5px 10px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontSize: 12,
-                              }}>
+                              <button className="wm-btn" onClick={() => setEditingSource(source)} style={{ padding: '5px 10px', fontSize: 12 }}>
                                 Edit
                               </button>
-                              <button onClick={() => deleteSource(source.id)} style={{
-                                padding: '5px 10px', borderRadius: 6, border: '1px solid #ef4444', background: '#fff', color: '#ef4444', cursor: 'pointer', fontSize: 12,
-                              }}>
+                              <button className="wm-btn wm-btn--danger" onClick={() => deleteSource(source.id)} style={{ padding: '5px 10px', fontSize: 12 }}>
                                 🗑️
                               </button>
                             </div>
@@ -547,33 +540,33 @@ export default function SourcePanel() {
 
       {/* Edit Modal */}
       {editingSource && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
           onClick={() => setEditingSource(null)}>
-          <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: '100%', maxWidth: 480, maxHeight: '80vh', overflowY: 'auto' }}
+          <div className="wm-card" style={{ padding: 24, width: '100%', maxWidth: 480, maxHeight: '80vh', overflowY: 'auto' }}
             onClick={(e) => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 16px' }}>Edit Source</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Name</label>
-                <input value={editingSource.name} onChange={(e) => setEditingSource({ ...editingSource, name: e.target.value })}
-                  style={{ width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }} />
+                <input className="wm-input" value={editingSource.name} onChange={(e) => setEditingSource({ ...editingSource, name: e.target.value })}
+                  style={{ width: '100%', marginTop: 4 }} />
               </div>
               <div>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Poll interval (seconds)</label>
-                <input type="number" min={10} max={86400} value={editingSource.pollIntervalSeconds}
+                <input className="wm-input" type="number" min={10} max={86400} value={editingSource.pollIntervalSeconds}
                   onChange={(e) => setEditingSource({ ...editingSource, pollIntervalSeconds: Number(e.target.value) })}
-                  style={{ width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }} />
+                  style={{ width: '100%', marginTop: 4 }} />
               </div>
               <div>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Config (JSON)</label>
-                <textarea value={JSON.stringify(editingSource.config, null, 2)}
+                <textarea className="wm-input" value={JSON.stringify(editingSource.config, null, 2)}
                   onChange={(e) => { try { setEditingSource({ ...editingSource, config: JSON.parse(e.target.value) }); } catch { /* ignore */ } }}
                   rows={8}
-                  style={{ width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, fontFamily: 'monospace' }} />
+                  style={{ width: '100%', marginTop: 4, fontSize: 13, fontFamily: 'var(--wm-font-mono)' }} />
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <button onClick={updateSourceConfig} style={{ flex: 1, padding: '10px', borderRadius: 6, border: 'none', background: '#111', color: '#fff', cursor: 'pointer', fontSize: 14 }}>Save</button>
-                <button onClick={() => setEditingSource(null)} style={{ flex: 1, padding: '10px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontSize: 14 }}>Cancel</button>
+                <button className="wm-btn wm-btn--primary" onClick={updateSourceConfig} style={{ flex: 1, padding: '10px' }}>Save</button>
+                <button className="wm-btn" onClick={() => setEditingSource(null)} style={{ flex: 1, padding: '10px' }}>Cancel</button>
               </div>
             </div>
           </div>
@@ -591,23 +584,21 @@ export default function SourcePanel() {
                 const kinds = SOURCE_KINDS.filter((k) => k.category === cat);
                 return (
                   <div key={cat}>
-                    <h3 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: CATEGORY_COLORS[cat] || '#374151', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    <h3 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: CATEGORY_COLORS[cat] || 'var(--wm-text-2)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                       {cat}
                     </h3>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10 }}>
                       {kinds.map((k) => (
-                        <button key={k.kind} onClick={() => {
+                        <button key={k.kind} className="wm-card wm-card--hover" onClick={() => {
                           setSelectedKind(k.kind);
                           const defaults: Record<string, string> = {};
                           for (const f of k.fields) { if (f.defaultValue) defaults[f.key] = f.defaultValue; }
                           setFormConfig(defaults);
                           setFormError('');
                         }} style={{
-                          padding: 14, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff',
-                          cursor: 'pointer', textAlign: 'left', fontSize: 14, transition: 'all 0.15s',
-                        }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = CATEGORY_COLORS[cat] || '#111'; (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)'; }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = '#e5e7eb'; (e.currentTarget as HTMLButtonElement).style.boxShadow = 'none'; }}>
+                          padding: 14, color: 'var(--wm-text)',
+                          cursor: 'pointer', textAlign: 'left', fontSize: 14,
+                        }}>
                           <div style={{ fontSize: 22, marginBottom: 4 }}>{k.icon}</div>
                           <div style={{ fontWeight: 600, fontSize: 13 }}>{k.label}</div>
                         </button>
@@ -619,44 +610,39 @@ export default function SourcePanel() {
             </div>
           ) : (
             <div style={{ maxWidth: 600 }}>
-              <button onClick={() => { setSelectedKind(''); setFormError(''); }} style={{
-                marginBottom: 16, padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontSize: 13,
-              }}>← Back to types</button>
+              <button className="wm-btn" onClick={() => { setSelectedKind(''); setFormError(''); }} style={{ marginBottom: 16, padding: '6px 12px', fontSize: 13 }}>← Back to types</button>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
                   <label style={{ fontSize: 13, fontWeight: 500 }}>Source Name *</label>
-                  <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder={`e.g. My ${SOURCE_KINDS.find((k) => k.kind === selectedKind)?.label}`}
-                    style={{ width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }} />
+                  <input className="wm-input" value={formName} onChange={(e) => setFormName(e.target.value)} placeholder={`e.g. My ${SOURCE_KINDS.find((k) => k.kind === selectedKind)?.label}`}
+                    style={{ width: '100%', marginTop: 4 }} />
                 </div>
                 <div>
                   <label style={{ fontSize: 13, fontWeight: 500 }}>Poll Interval (seconds)</label>
-                  <input type="number" min={10} max={86400} value={formInterval} onChange={(e) => setFormInterval(Number(e.target.value))}
-                    style={{ width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }} />
-                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>{Math.round(formInterval / 60)} minutes</div>
+                  <input className="wm-input" type="number" min={10} max={86400} value={formInterval} onChange={(e) => setFormInterval(Number(e.target.value))}
+                    style={{ width: '100%', marginTop: 4 }} />
+                  <div style={{ fontSize: 11, color: 'var(--wm-muted)', marginTop: 2 }}>{Math.round(formInterval / 60)} minutes</div>
                 </div>
                 {SOURCE_KINDS.find((k) => k.kind === selectedKind)?.fields.map((field) => (
                   <div key={field.key}>
-                    <label style={{ fontSize: 13, fontWeight: 500 }}>{field.label}{field.required && <span style={{ color: '#ef4444' }}> *</span>}</label>
+                    <label style={{ fontSize: 13, fontWeight: 500 }}>{field.label}{field.required && <span style={{ color: colors.critical }}> *</span>}</label>
                     {field.type === 'select' ? (
-                      <select value={formConfig[field.key] ?? field.defaultValue ?? ''} onChange={(e) => setFormConfig({ ...formConfig, [field.key]: e.target.value })}
-                        style={{ width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }}>
+                      <select className="wm-select" value={formConfig[field.key] ?? field.defaultValue ?? ''} onChange={(e) => setFormConfig({ ...formConfig, [field.key]: e.target.value })}
+                        style={{ width: '100%', marginTop: 4 }}>
                         {field.options?.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                       </select>
                     ) : (
-                      <input type={field.type === 'password' ? 'password' : field.type} value={formConfig[field.key] ?? ''}
+                      <input className="wm-input" type={field.type === 'password' ? 'password' : field.type} value={formConfig[field.key] ?? ''}
                         onChange={(e) => setFormConfig({ ...formConfig, [field.key]: e.target.value })}
                         placeholder={field.placeholder}
-                        style={{ width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 14 }} />
+                        style={{ width: '100%', marginTop: 4 }} />
                     )}
                   </div>
                 ))}
-                {formError && <div style={{ padding: '10px 12px', borderRadius: 6, background: '#fef2f2', color: '#dc2626', fontSize: 13 }}>{formError}</div>}
-                {formSuccess && <div style={{ padding: '10px 12px', borderRadius: 6, background: '#f0fdf4', color: '#16a34a', fontSize: 13 }}>{formSuccess}</div>}
-                <button onClick={submitNewSource} style={{
-                  padding: '10px 20px', borderRadius: 6, border: 'none', background: '#111', color: '#fff',
-                  cursor: 'pointer', fontSize: 15, fontWeight: 500, marginTop: 4,
-                }}>Create Source</button>
+                {formError && <div style={{ padding: '10px 12px', borderRadius: 3, background: `rgba(${rgb(colors.critical)}, 0.12)`, color: colors.critical, fontSize: 13 }}>{formError}</div>}
+                {formSuccess && <div style={{ padding: '10px 12px', borderRadius: 3, background: `rgba(${rgb(colors.live)}, 0.12)`, color: colors.live, fontSize: 13 }}>{formSuccess}</div>}
+                <button className="wm-btn wm-btn--primary" onClick={submitNewSource} style={{ padding: '10px 20px', fontSize: 15, marginTop: 4 }}>Create Source</button>
               </div>
             </div>
           )}
@@ -669,53 +655,54 @@ export default function SourcePanel() {
           {/* Windy */}
           <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>🌬️ Windy Webcams</h2>
           <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-            <input placeholder="Country (e.g. CH, US)" value={windyCountry} onChange={(e) => setWindyCountry(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', minWidth: 160, fontSize: 14 }} />
-            <input placeholder="Category" value={windyCategory} onChange={(e) => setWindyCategory(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', minWidth: 160, fontSize: 14 }} />
-            <input placeholder="Query" value={windyQuery} onChange={(e) => setWindyQuery(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', minWidth: 160, fontSize: 14 }} />
-            <button onClick={searchWindy} disabled={windyLoading}
-              style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#0ea5e9', color: '#fff', cursor: 'pointer', fontSize: 14 }}>
+            <input className="wm-input" placeholder="Country (e.g. CH, US)" value={windyCountry} onChange={(e) => setWindyCountry(e.target.value)}
+              style={{ minWidth: 160 }} />
+            <input className="wm-input" placeholder="Category" value={windyCategory} onChange={(e) => setWindyCategory(e.target.value)}
+              style={{ minWidth: 160 }} />
+            <input className="wm-input" placeholder="Query" value={windyQuery} onChange={(e) => setWindyQuery(e.target.value)}
+              style={{ minWidth: 160 }} />
+            <button className="wm-btn wm-btn--primary" onClick={searchWindy} disabled={windyLoading}>
               {windyLoading ? '...' : 'Search'}
             </button>
           </div>
           {selectedWindy.size > 0 && (
             <div style={{ marginBottom: 12 }}>
-              <button onClick={importSelectedWindy}
-                style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#0ea5e9', color: '#fff', cursor: 'pointer', fontSize: 13 }}>
+              <button className="wm-btn wm-btn--primary" onClick={importSelectedWindy} style={{ fontSize: 13 }}>
                 Import {selectedWindy.size} selected
               </button>
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10, marginBottom: 32 }}>
-            {windyResults.map((cam) => (
-              <div key={cam.webcamId} onClick={() => toggleWindySelection(cam.webcamId)} style={{
-                padding: 10, borderRadius: 8, border: selectedWindy.has(cam.webcamId) ? '2px solid #0ea5e9' : '1px solid #e5e7eb',
-                background: '#fff', cursor: 'pointer', position: 'relative',
+            {windyResults.map((cam) => {
+              const camSelected = selectedWindy.has(cam.webcamId);
+              return (
+              <div key={cam.webcamId} className="wm-card wm-card--hover" onClick={() => toggleWindySelection(cam.webcamId)} style={{
+                padding: 10, cursor: 'pointer', position: 'relative',
+                borderColor: camSelected ? colors.info : undefined,
               }}>
                 {cam.images?.current?.preview && (
                   <img src={cam.images.current.preview} alt={cam.title ?? 'webcam'}
-                    style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 6, marginBottom: 6 }} loading="lazy" />
+                    style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 3, marginBottom: 6 }} loading="lazy" />
                 )}
                 <div style={{ fontWeight: 600, fontSize: 13 }}>{cam.title ?? `Webcam ${cam.webcamId}`}</div>
-                <div style={{ fontSize: 11, color: '#666' }}>{[cam.location?.city, cam.location?.country].filter(Boolean).join(', ')}</div>
-                {selectedWindy.has(cam.webcamId) && (
-                  <div style={{ position: 'absolute', top: 6, right: 6, background: '#0ea5e9', color: '#fff', borderRadius: 12, width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}>✓</div>
+                <div style={{ fontSize: 11, color: 'var(--wm-dim)' }}>{[cam.location?.city, cam.location?.country].filter(Boolean).join(', ')}</div>
+                {camSelected && (
+                  <div style={{ position: 'absolute', top: 6, right: 6, background: colors.info, color: '#0a0a0a', borderRadius: 12, width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}>✓</div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Webcam Library */}
           <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>📹 Webcam Library</h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10, marginBottom: 32 }}>
             {library.map((cat) => (
-              <div key={cat.key} style={{ padding: 14, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>
+              <div key={cat.key} className="wm-card" style={{ padding: 14 }}>
                 <div style={{ fontWeight: 600, marginBottom: 2 }}>{cat.name}</div>
-                <div style={{ fontSize: 12, color: '#666', marginBottom: 10 }}>{cat.count} cameras</div>
-                <button onClick={() => importCategory(cat.key)}
-                  style={{ width: '100%', padding: '7px 12px', borderRadius: 6, border: 'none', background: '#111', color: '#fff', cursor: 'pointer', fontSize: 13 }}>
+                <div style={{ fontSize: 12, color: 'var(--wm-dim)', marginBottom: 10 }}>{cat.count} cameras</div>
+                <button className="wm-btn wm-btn--primary" onClick={() => importCategory(cat.key)}
+                  style={{ width: '100%', padding: '7px 12px', fontSize: 13 }}>
                   Import All
                 </button>
               </div>
@@ -726,11 +713,11 @@ export default function SourcePanel() {
           <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>📡 IP Camera Library</h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
             {ipCameraLibrary.map((cat) => (
-              <div key={cat.key} style={{ padding: 14, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>
+              <div key={cat.key} className="wm-card" style={{ padding: 14 }}>
                 <div style={{ fontWeight: 600, marginBottom: 2 }}>{cat.name}</div>
-                <div style={{ fontSize: 12, color: '#666', marginBottom: 10 }}>{cat.count} cameras</div>
-                <button onClick={() => importIpCameraCategory(cat.key)}
-                  style={{ width: '100%', padding: '7px 12px', borderRadius: 6, border: 'none', background: '#1e3a8a', color: '#fff', cursor: 'pointer', fontSize: 13 }}>
+                <div style={{ fontSize: 12, color: 'var(--wm-dim)', marginBottom: 10 }}>{cat.count} cameras</div>
+                <button className="wm-btn" onClick={() => importIpCameraCategory(cat.key)}
+                  style={{ width: '100%', padding: '7px 12px', fontSize: 13, borderColor: colors.info, color: colors.info }}>
                   Import All
                 </button>
               </div>

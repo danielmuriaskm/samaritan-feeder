@@ -1,15 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { getBrief } from '../lib/api.js';
 import type { Brief } from '../lib/types.js';
-
-const signalKindColors: Record<string, string> = {
-  convergence: '#3b82f6',
-  geo_convergence: '#0ea5e9',
-  velocity_spike: '#f59e0b',
-  silent_source: '#6b7280',
-  volume_anomaly: '#ef4444',
-  cluster_surge: '#8b5cf6',
-};
+import { signalColors, colors, rgb, fonts } from '../lib/theme.js';
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -41,7 +33,7 @@ function ItemCard({ item, accent }: { item: unknown; accent: string }): ReactNod
   // Primitive item -> just print it.
   if (item === null || typeof item !== 'object') {
     return (
-      <div style={{ padding: 12, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', fontSize: 14, color: '#374151' }}>
+      <div className="wm-card" style={{ padding: 12, fontSize: 14, color: 'var(--wm-text-2)' }}>
         {String(item)}
       </div>
     );
@@ -51,8 +43,8 @@ function ItemCard({ item, accent }: { item: unknown; accent: string }): ReactNod
   if (!rec) {
     // Array or other object shape — dump it readably.
     return (
-      <div style={{ padding: 12, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>
-        <pre style={{ margin: 0, fontSize: 12, color: '#6b7280', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+      <div className="wm-card" style={{ padding: 12 }}>
+        <pre style={{ margin: 0, fontSize: 12, color: 'var(--wm-dim)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
           {JSON.stringify(item, null, 2)}
         </pre>
       </div>
@@ -72,35 +64,32 @@ function ItemCard({ item, accent }: { item: unknown; accent: string }): ReactNod
   );
 
   return (
-    <div style={{ padding: 14, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>
+    <div className="wm-card" style={{ padding: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: title || summary ? 8 : 0, flexWrap: 'wrap' }}>
         {kind && (
           <span
+            className="wm-chip"
             style={{
-              fontSize: 11,
-              fontWeight: 600,
               textTransform: 'uppercase',
-              padding: '2px 8px',
-              borderRadius: 4,
-              background: signalKindColors[kind] ?? accent,
-              color: '#fff',
+              color: signalColors[kind] ?? accent,
+              borderColor: signalColors[kind] ?? accent,
             }}
           >
             {kind.replace(/_/g, ' ')}
           </span>
         )}
         {score !== undefined && (
-          <span style={{ fontSize: 12, color: '#666', marginLeft: 'auto' }}>
+          <span className="wm-meta" style={{ fontSize: 12, color: 'var(--wm-dim)', marginLeft: 'auto' }}>
             score {score.toFixed(score < 10 ? 2 : 0)}
           </span>
         )}
       </div>
-      {title && <div style={{ fontWeight: 600, marginBottom: summary ? 4 : 0, color: '#111' }}>{title}</div>}
-      {summary && <div style={{ fontSize: 14, color: '#374151', lineHeight: 1.5 }}>{summary}</div>}
+      {title && <div style={{ fontWeight: 600, marginBottom: summary ? 4 : 0, color: 'var(--wm-text)' }}>{title}</div>}
+      {summary && <div style={{ fontSize: 14, color: 'var(--wm-text-2)', lineHeight: 1.5 }}>{summary}</div>}
       {extras.length > 0 && (
         <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {extras.map(([k, v]) => (
-            <span key={k} style={{ fontSize: 11, padding: '2px 8px', background: '#f3f4f6', borderRadius: 4, color: '#374151' }}>
+            <span key={k} className="wm-chip wm-meta">
               {k}: {String(v).slice(0, 40)}
             </span>
           ))}
@@ -114,8 +103,8 @@ function Section({ title, items, accent }: { title: string; items: unknown[]; ac
   if (!items.length) return null;
   return (
     <div style={{ marginBottom: 24 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: '#6b7280', marginBottom: 10 }}>
-        {title} <span style={{ color: '#9ca3af', fontWeight: 400 }}>({items.length})</span>
+      <div style={{ fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--wm-dim)', marginBottom: 10 }}>
+        {title} <span style={{ color: 'var(--wm-muted)', fontWeight: 400 }}>({items.length})</span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {items.map((item, i) => (
@@ -168,45 +157,45 @@ export default function BriefPanel() {
     <div style={{ padding: 20, maxWidth: 900, margin: '0 auto', height: '100%', overflowY: 'auto' }}>
       {/* User selector */}
       <form onSubmit={submit} style={{ display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 13, color: '#6b7280' }}>Brief for</label>
+        <label style={{ fontSize: 13, color: 'var(--wm-dim)' }}>Brief for</label>
         <input
           type="text"
+          className="wm-input"
           value={userIdInput}
           onChange={(e) => setUserIdInput(e.target.value)}
           placeholder="operator"
-          style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #ccc', fontSize: 14, minWidth: 200 }}
+          style={{ minWidth: 200 }}
         />
         <button
           type="submit"
-          style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #ccc', background: '#f3f4f6', cursor: 'pointer', fontSize: 13 }}
+          className="wm-btn"
+          style={{ cursor: 'pointer' }}
         >
           Load
         </button>
         {brief && (
-          <span style={{ fontSize: 12, color: '#666', marginLeft: 'auto' }}>
+          <span className="wm-meta" style={{ fontSize: 12, color: 'var(--wm-dim)', marginLeft: 'auto' }}>
             {brief.eventCount.toLocaleString()} event{brief.eventCount === 1 ? '' : 's'} · {relativeTime(brief.createdAt)}
           </span>
         )}
       </form>
 
-      {loading && <div style={{ fontSize: 13, color: '#666' }}>Loading...</div>}
+      {loading && <div style={{ fontSize: 13, color: 'var(--wm-dim)' }}>Loading...</div>}
 
       {!loading && error && (
-        <div style={{ padding: 16, borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: 14 }}>
+        <div style={{ padding: 16, borderRadius: 4, color: 'var(--wm-critical)', background: `rgba(${rgb(colors.critical)}, 0.10)`, fontSize: 14 }}>
           Failed to load brief: {error}
         </div>
       )}
 
       {!loading && !error && !brief && (
         <div
+          className="wm-card"
           style={{
             padding: 40,
             textAlign: 'center',
-            color: '#6b7280',
+            color: 'var(--wm-dim)',
             fontSize: 15,
-            border: '1px dashed #e5e7eb',
-            borderRadius: 8,
-            background: '#fafafa',
           }}
         >
           📰 No brief yet — the digest cron synthesizes hourly.
@@ -217,16 +206,14 @@ export default function BriefPanel() {
         <>
           {/* Lead */}
           <div
+            className="wm-card"
             style={{
               padding: 20,
-              borderRadius: 8,
-              border: '1px solid #e5e7eb',
-              background: '#fff',
               marginBottom: 24,
             }}
           >
-            <div style={{ fontSize: 17, lineHeight: 1.6, color: '#111', fontWeight: 500 }}>{brief.lead}</div>
-            <div style={{ marginTop: 12, fontSize: 12, color: '#6b7280', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 17, lineHeight: 1.6, color: 'var(--wm-text)', fontWeight: 500 }}>{brief.lead}</div>
+            <div className="wm-meta" style={{ marginTop: 12, fontSize: 12, color: 'var(--wm-dim)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               <span>{brief.eventCount.toLocaleString()} event{brief.eventCount === 1 ? '' : 's'}</span>
               {brief.windowStart !== undefined && brief.windowEnd !== undefined && (
                 <span>
@@ -237,19 +224,19 @@ export default function BriefPanel() {
             </div>
           </div>
 
-          <Section title="Threads" items={threads} accent="#3b82f6" />
-          <Section title="Signals" items={signals} accent="#8b5cf6" />
+          <Section title="Threads" items={threads} accent={colors.info} />
+          <Section title="Signals" items={signals} accent={colors.purple} />
 
           {/* Ranked events */}
           {rankedEventIds.length > 0 && (
             <div style={{ marginBottom: 24 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: '#6b7280', marginBottom: 10 }}>
-                Ranked events <span style={{ color: '#9ca3af', fontWeight: 400 }}>({rankedEventIds.length})</span>
+              <div style={{ fontSize: 13, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--wm-dim)', marginBottom: 10 }}>
+                Ranked events <span style={{ color: 'var(--wm-muted)', fontWeight: 400 }}>({rankedEventIds.length})</span>
               </div>
               <ol style={{ margin: 0, paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {rankedEventIds.map((id, i) => (
-                  <li key={`${id}-${i}`} style={{ fontSize: 13, color: '#374151' }}>
-                    <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, color: '#6b7280' }}>{String(id)}</code>
+                  <li key={`${id}-${i}`} style={{ fontSize: 13, color: 'var(--wm-text-2)' }}>
+                    <code style={{ fontFamily: fonts.mono, fontSize: 12, color: 'var(--wm-dim)' }}>{String(id)}</code>
                   </li>
                 ))}
               </ol>
@@ -257,7 +244,7 @@ export default function BriefPanel() {
           )}
 
           {threads.length === 0 && signals.length === 0 && rankedEventIds.length === 0 && (
-            <div style={{ fontSize: 13, color: '#9ca3af', fontStyle: 'italic' }}>
+            <div style={{ fontSize: 13, color: 'var(--wm-muted)', fontStyle: 'italic' }}>
               No threads, signals, or ranked events in this brief.
             </div>
           )}

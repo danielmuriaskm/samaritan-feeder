@@ -1,0 +1,221 @@
+/* worldmonitor-style "ops console" theme — dark, flat, dense.
+ * CSS custom properties MIRROR web/src/lib/theme.ts (change a hex in both).
+ * Imported once in main.tsx. Utility classes here keep components lean; the
+ * inline-override rule (theme.ts tokens) handles per-row computed colors. */
+
+:root {
+  /* surfaces */
+  --wm-base: #0a0a0a;
+  --wm-bg2: #111111;
+  --wm-panel: #141414;
+  --wm-hover: #1e1e1e;
+  /* lines */
+  --wm-border: #2a2a2a;
+  --wm-border-strong: #444444;
+  --wm-border-subtle: #1a1a1a;
+  /* text */
+  --wm-text: #e8e8e8;
+  --wm-text-2: #cccccc;
+  --wm-dim: #888888;
+  --wm-muted: #666666;
+  /* accent + neon semantics */
+  --wm-accent: #ffffff;
+  --wm-critical: #ff4444;
+  --wm-high: #ff8800;
+  --wm-elevated: #ffaa00;
+  --wm-normal: #44aa44;
+  --wm-low: #3388ff;
+  --wm-info: #3b82f6;
+  --wm-live: #44ff88;
+  /* map */
+  --wm-map-bg: #020a08;
+  /* fonts */
+  --wm-font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --wm-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+}
+
+/* ----- base resets ----- */
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--wm-base);
+  color: var(--wm-text);
+  font-family: var(--wm-font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: rgba(255, 255, 255, 0.18); }
+a { color: var(--wm-info); }
+input, select, textarea, button { font-family: inherit; }
+h1, h2, h3, h4 { font-weight: 600; }
+code, .wm-mono { font-family: var(--wm-font-mono); }
+
+/* dark scrollbars */
+* { scrollbar-color: #333 transparent; scrollbar-width: thin; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 5px; border: 2px solid var(--wm-base); }
+::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+
+/* ----- utility classes ----- */
+.wm-card {
+  background: var(--wm-panel);
+  border: 1px solid var(--wm-border);
+  border-radius: 4px;
+}
+.wm-card--hover { transition: background 0.15s, border-color 0.15s; }
+.wm-card--hover:hover { background: var(--wm-hover); border-color: var(--wm-border-strong); }
+
+.wm-panel {
+  background: var(--wm-panel);
+  border: 1px solid var(--wm-border);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.wm-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--wm-border);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--wm-dim);
+  flex: 0 0 auto;
+}
+.wm-panel__count { color: var(--wm-muted); font-variant-numeric: tabular-nums; font-weight: 600; }
+.wm-panel__body { padding: 10px 12px; overflow: auto; flex: 1 1 auto; min-height: 0; }
+
+.wm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  align-content: start;
+}
+
+.wm-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--wm-dim);
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.wm-tab:hover { color: var(--wm-text); background: rgba(255, 255, 255, 0.03); }
+.wm-tab--active { color: var(--wm-accent); border-bottom-color: var(--wm-accent); font-weight: 600; }
+
+.wm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  color: #0a0a0a;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.wm-chip--outline { background: transparent !important; border: 1px solid currentColor; }
+
+.wm-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wm-table th {
+  text-align: left;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  color: var(--wm-muted);
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--wm-border);
+}
+.wm-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--wm-border-subtle);
+  color: var(--wm-text-2);
+  font-variant-numeric: tabular-nums;
+}
+.wm-table tbody tr:hover td { background: var(--wm-hover); }
+
+.wm-btn {
+  background: transparent;
+  border: 1px solid var(--wm-border-strong);
+  color: var(--wm-text);
+  padding: 7px 14px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+.wm-btn:hover { border-color: var(--wm-accent); background: rgba(255, 255, 255, 0.06); }
+.wm-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.wm-btn--primary { background: var(--wm-accent); color: #0a0a0a; border-color: var(--wm-accent); font-weight: 600; }
+.wm-btn--primary:hover { background: #e0e0e0; }
+.wm-btn--danger { border-color: var(--wm-critical); color: var(--wm-critical); }
+.wm-btn--danger:hover { background: rgba(255, 68, 68, 0.12); border-color: var(--wm-critical); }
+
+.wm-input, .wm-select {
+  background: var(--wm-bg2);
+  border: 1px solid var(--wm-border-strong);
+  color: var(--wm-text);
+  padding: 8px 12px;
+  border-radius: 3px;
+  font-size: 14px;
+}
+.wm-input:focus, .wm-select:focus { outline: none; border-color: var(--wm-accent); }
+.wm-input::placeholder { color: var(--wm-muted); }
+
+.wm-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.wm-dot--glow { box-shadow: 0 0 6px currentColor; }
+
+.wm-meta {
+  font-size: 12px;
+  color: var(--wm-dim);
+  font-family: var(--wm-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.wm-muted { color: var(--wm-muted); }
+.wm-strong { color: var(--wm-text); }
+
+/* ----- animations (glow only on live/active, per worldmonitor) ----- */
+@keyframes wm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.wm-live-dot { animation: wm-pulse 1.6s ease-in-out infinite; }
+@keyframes wm-item-glow { from { background: rgba(68, 255, 136, 0.12); } to { background: transparent; } }
+.wm-new { animation: wm-item-glow 2s ease-out; }
+
+/* ----- Leaflet dark overrides (cannot be done inline) ----- */
+.leaflet-container { background: var(--wm-map-bg) !important; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--wm-panel) !important;
+  color: var(--wm-text) !important;
+  border: 1px solid var(--wm-border) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6) !important;
+}
+.leaflet-popup-content-wrapper { border-radius: 4px !important; }
+.leaflet-popup-content a { color: var(--wm-info) !important; }
+.leaflet-control-attribution {
+  background: rgba(10, 10, 10, 0.7) !important;
+  color: var(--wm-muted) !important;
+}
+.leaflet-control-attribution a { color: var(--wm-dim) !important; }
+.leaflet-bar a {
+  background: var(--wm-panel) !important;
+  color: var(--wm-text) !important;
+  border-color: var(--wm-border) !important;
+}
+.leaflet-bar a:hover { background: var(--wm-hover) !important; }

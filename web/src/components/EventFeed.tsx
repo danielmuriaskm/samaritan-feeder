@@ -1,15 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { getEvents, getSources } from '../lib/api.js';
 import type { IntelEvent, Source } from '../lib/types.js';
-
-const kindColors: Record<string, string> = {
-  visual: '#3b82f6',
-  text: '#22c55e',
-  anomaly: '#ef4444',
-  alert: '#dc2626',
-  social_post: '#8b5cf6',
-  detection: '#f59e0b',
-};
+import { colors, kindColors, scoreColor } from '../lib/theme.js';
 
 const sourceKindIcons: Record<string, string> = {
   reddit: '🤖',
@@ -40,14 +32,6 @@ const sourceKindIcons: Record<string, string> = {
   reliefweb: '🆘',
 };
 
-// Color-grade a 0..1 score from green (low) -> amber -> red (high importance).
-function scoreColor(score: number): string {
-  if (score >= 0.75) return '#dc2626';
-  if (score >= 0.5) return '#f59e0b';
-  if (score >= 0.25) return '#eab308';
-  return '#22c55e';
-}
-
 const URL_RE =
   /https?:\/\/[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)/g;
 
@@ -68,7 +52,7 @@ function LinkifyText({ text }: { text: string }) {
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        style={{ color: '#2563eb', textDecoration: 'underline', wordBreak: 'break-all' }}
+        style={{ color: 'var(--wm-info)', textDecoration: 'underline', wordBreak: 'break-all' }}
         onClick={(e) => e.stopPropagation()}
       >
         {url}
@@ -122,16 +106,18 @@ export default function EventFeed() {
       {/* Filters */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
         <input
+          className="wm-input"
           type="text"
           placeholder="Search events..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          style={{ flex: 1, minWidth: 200, padding: '8px 12px', borderRadius: 6, border: '1px solid #ccc', fontSize: 14 }}
+          style={{ flex: 1, minWidth: 200, fontSize: 14 }}
         />
         <select
+          className="wm-select"
           value={sourceId}
           onChange={(e) => setSourceId(e.target.value)}
-          style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #ccc', minWidth: 180, fontSize: 14 }}
+          style={{ minWidth: 180, fontSize: 14 }}
         >
           <option value="">All sources</option>
           {sources.map((s) => (
@@ -141,10 +127,11 @@ export default function EventFeed() {
           ))}
         </select>
         <select
+          className="wm-select"
           multiple
           value={kinds}
           onChange={(e) => setKinds(Array.from(e.target.selectedOptions).map((o) => o.value))}
-          style={{ padding: 8, borderRadius: 6, border: '1px solid #ccc', minWidth: 140, fontSize: 14 }}
+          style={{ minWidth: 140, fontSize: 14 }}
         >
           {['visual', 'text', 'anomaly', 'alert', 'social_post', 'detection'].map((k) => (
             <option key={k} value={k}>
@@ -158,7 +145,7 @@ export default function EventFeed() {
             alignItems: 'center',
             gap: 6,
             fontSize: 13,
-            color: '#374151',
+            color: 'var(--wm-dim)',
             cursor: 'pointer',
             userSelect: 'none',
           }}
@@ -171,7 +158,7 @@ export default function EventFeed() {
           Rank by importance
         </label>
         {rankByScore && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#374151' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--wm-dim)' }}>
             min score
             <input
               type="range"
@@ -181,13 +168,14 @@ export default function EventFeed() {
               value={minScore}
               onChange={(e) => setMinScore(Number(e.target.value))}
             />
-            <span style={{ fontVariantNumeric: 'tabular-nums', color: '#6b7280', minWidth: 28 }}>
+            <span style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--wm-dim)', minWidth: 28 }}>
               {(minScore * 100).toFixed(0)}
             </span>
           </label>
         )}
         {(query || kinds.length > 0 || sourceId || rankByScore) && (
           <button
+            className="wm-btn"
             onClick={() => {
               setQuery('');
               setKinds([]);
@@ -195,14 +183,7 @@ export default function EventFeed() {
               setRankByScore(false);
               setMinScore(0.3);
             }}
-            style={{
-              padding: '8px 14px',
-              borderRadius: 6,
-              border: '1px solid #ccc',
-              background: '#f3f4f6',
-              cursor: 'pointer',
-              fontSize: 13,
-            }}
+            style={{ fontSize: 13 }}
           >
             Clear
           </button>
@@ -210,7 +191,7 @@ export default function EventFeed() {
       </div>
 
       {/* Results count */}
-      <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+      <div className="wm-meta" style={{ fontSize: 13, marginBottom: 12 }}>
         {loading ? 'Loading...' : `${events.length.toLocaleString()} event${events.length === 1 ? '' : 's'} found`}
       </div>
 
@@ -219,50 +200,38 @@ export default function EventFeed() {
         {events.map((event) => {
           const source = sourceMap.get(event.sourceId);
           return (
-            <div
-              key={event.id}
-              style={{
-                padding: 16,
-                borderRadius: 8,
-                border: '1px solid #e5e7eb',
-                background: '#fff',
-              }}
-            >
+            <div key={event.id} className="wm-card" style={{ padding: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                 <span
+                  className="wm-chip"
                   style={{
                     fontSize: 11,
                     fontWeight: 600,
                     textTransform: 'uppercase',
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    background: kindColors[event.kind] ?? '#999',
-                    color: '#fff',
+                    background: kindColors[event.kind] ?? colors.dim,
                   }}
                 >
                   {event.kind}
                 </span>
                 {source && (
-                  <span style={{ fontSize: 12, color: '#6b7280' }}>
+                  <span style={{ fontSize: 12, color: 'var(--wm-dim)' }}>
                     {sourceKindIcons[source.kind] ?? '📡'} {source.name}
                   </span>
                 )}
-                <span style={{ fontSize: 12, color: '#666' }}>
+                <span style={{ fontSize: 12, color: 'var(--wm-dim)' }}>
                   {new Date(event.eventAt).toLocaleString()}
                 </span>
-                <span style={{ fontSize: 12, color: '#666', marginLeft: 'auto' }}>
+                <span style={{ fontSize: 12, color: 'var(--wm-dim)', marginLeft: 'auto' }}>
                   {(event.confidence * 100).toFixed(0)}% confidence
                 </span>
                 {event.score != null && (
                   <span
+                    className="wm-chip"
                     title="Composite importance score"
                     style={{
                       fontSize: 11,
                       fontWeight: 700,
-                      padding: '2px 8px',
-                      borderRadius: 999,
                       background: scoreColor(event.score),
-                      color: '#fff',
                       fontVariantNumeric: 'tabular-nums',
                     }}
                   >
@@ -276,23 +245,23 @@ export default function EventFeed() {
                   href={event.tags.link}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ display: 'inline-block', fontSize: 13, color: '#2563eb', marginBottom: 6, textDecoration: 'underline', wordBreak: 'break-all' }}
+                  style={{ display: 'inline-block', fontSize: 13, color: 'var(--wm-info)', marginBottom: 6, textDecoration: 'underline', wordBreak: 'break-all' }}
                 >
                   🔗 {event.tags.link}
                 </a>
               )}
-              <div style={{ fontSize: 14, color: '#374151', lineHeight: 1.5 }}>
+              <div style={{ fontSize: 14, color: 'var(--wm-text-2)', lineHeight: 1.5 }}>
                 <LinkifyText text={event.content} />
               </div>
               {event.location && (
-                <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>
+                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--wm-dim)' }}>
                   📍 {event.location.lat.toFixed(4)}, {event.location.lon.toFixed(4)}
                 </div>
               )}
               {Object.keys(event.tags).length > 0 && (
                 <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {Object.entries(event.tags).map(([k, v]) => (
-                    <span key={k} style={{ fontSize: 11, padding: '2px 8px', background: '#f3f4f6', borderRadius: 4 }}>
+                    <span key={k} style={{ fontSize: 11, padding: '2px 8px', background: 'var(--wm-hover)', color: 'var(--wm-dim)', borderRadius: 4 }}>
                       {k}: {String(v).slice(0, 30)}
                     </span>
                   ))}

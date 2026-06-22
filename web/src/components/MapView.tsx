@@ -4,6 +4,7 @@ import L from 'leaflet';
 import 'leaflet.markercluster';
 import Hls from 'hls.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
+import { colors, categoryColors, rgb } from '../lib/theme.js';
 
 interface Camera {
   name: string;
@@ -30,32 +31,42 @@ interface IntelEvent {
   eventAt: number;
 }
 
+// Marker fill map, sourced from the worldmonitor neon tokens (theme.ts). Keys are the
+// camera categories this view sees; values map to the closest semantic/category hue.
 const CATEGORY_COLORS: Record<string, string> = {
-  traffic: '#ef4444',
-  beach: '#06b6d4',
-  city: '#8b5cf6',
-  nature: '#22c55e',
-  ski: '#3b82f6',
-  weather: '#f59e0b',
-  coastal: '#06b6d4',
-  mountain: '#22c55e',
-  desert: '#f59e0b',
-  rural: '#22c55e',
-  urban: '#8b5cf6',
-  highway: '#ef4444',
-  bridge: '#8b5cf6',
-  windy: '#ec4899',
-  unknown: '#999',
+  traffic: categoryColors.traffic, // orange
+  beach: categoryColors.beach, // blue
+  city: colors.purple,
+  nature: colors.normal, // green
+  ski: colors.low, // blue
+  weather: categoryColors.weather, // teal
+  coastal: categoryColors.beach, // blue
+  mountain: colors.normal, // green
+  desert: colors.elevated, // amber
+  rural: colors.normal, // green
+  urban: colors.purple,
+  highway: categoryColors.traffic, // orange
+  bridge: colors.purple,
+  windy: colors.pink,
+  alert: categoryColors.alert, // red
+  anomaly: categoryColors.anomaly, // orange
+  unknown: colors.dim,
 };
 
+// Categories that should read as alerts get a subtle neon glow on their divIcon.
+const ALERT_CATEGORIES = new Set(['alert', 'anomaly', 'traffic', 'highway']);
+
 function getCategoryColor(category: string): string {
-  return CATEGORY_COLORS[category.toLowerCase()] ?? CATEGORY_COLORS[category] ?? '#999';
+  return CATEGORY_COLORS[category.toLowerCase()] ?? CATEGORY_COLORS[category] ?? colors.dim;
 }
 
-function createIcon(color: string) {
+function createIcon(color: string, glow = false) {
+  const shadow = glow
+    ? `box-shadow:0 0 6px ${color};`
+    : 'box-shadow:0 1px 4px rgba(0,0,0,0.4);';
   return L.divIcon({
     className: 'custom-marker',
-    html: `<div style="width:12px;height:12px;background:${color};border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4);"></div>`,
+    html: `<div style="width:12px;height:12px;background:${color};border-radius:50%;border:2px solid #fff;${shadow}"></div>`,
     iconSize: [12, 12],
     iconAnchor: [6, 6],
   });
@@ -71,7 +82,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
         left: 0,
         right: 0,
         bottom: 0,
-        background: 'rgba(0,0,0,0.92)',
+        background: 'rgba(0,0,0,0.9)',
         zIndex: 9999,
         display: 'flex',
         alignItems: 'center',
@@ -88,7 +99,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
           maxHeight: '100%',
           borderRadius: 8,
           objectFit: 'contain',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
         }}
       />
       <button
@@ -102,7 +113,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
           right: 16,
           background: 'rgba(255,255,255,0.15)',
           border: 'none',
-          color: '#fff',
+          color: colors.accent,
           fontSize: 24,
           width: 40,
           height: 40,
@@ -123,7 +134,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
           bottom: 16,
           left: '50%',
           transform: 'translateX(-50%)',
-          color: '#94a3b8',
+          color: colors.dim,
           fontSize: 12,
           background: 'rgba(0,0,0,0.6)',
           padding: '6px 14px',
@@ -186,7 +197,7 @@ function HlsPlayer({ url, posterUrl }: { url: string; posterUrl?: string }) {
   if (error && posterUrl) {
     return (
       <div style={{ padding: 8 }}>
-        <div style={{ padding: '8px 0', color: '#94a3b8', fontSize: 12, textAlign: 'center' }}>
+        <div style={{ padding: '8px 0', color: colors.dim, fontSize: 12, textAlign: 'center' }}>
           📡 Live stream offline — showing last snapshot
         </div>
         <img
@@ -196,13 +207,13 @@ function HlsPlayer({ url, posterUrl }: { url: string; posterUrl?: string }) {
           style={{
             width: '100%',
             borderRadius: 6,
-            background: '#0f172a',
+            background: colors.base,
             cursor: 'zoom-in',
           }}
         />
         {lightbox && <ImageLightbox src={posterUrl} onClose={() => setLightbox(false)} />}
         <div style={{ marginTop: 8, textAlign: 'center' }}>
-          <a href={url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6', fontSize: 12 }}>
+          <a href={url} target="_blank" rel="noreferrer" style={{ color: colors.info, fontSize: 12 }}>
             Try live stream
           </a>
         </div>
@@ -212,10 +223,10 @@ function HlsPlayer({ url, posterUrl }: { url: string; posterUrl?: string }) {
 
   if (error) {
     return (
-      <div style={{ padding: 16, color: '#94a3b8', fontSize: 13 }}>
+      <div style={{ padding: 16, color: colors.dim, fontSize: 13 }}>
         <div>❌ HLS playback failed.</div>
         <div style={{ marginTop: 8 }}>
-          <a href={url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6', fontSize: 12 }}>
+          <a href={url} target="_blank" rel="noreferrer" style={{ color: colors.info, fontSize: 12 }}>
             Open stream directly
           </a>
         </div>
@@ -270,15 +281,15 @@ function CameraPreview({ camera }: { camera: Camera }) {
   }, []);
 
   if (!url) {
-    return <div style={{ padding: 20, color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>No stream URL available</div>;
+    return <div style={{ padding: 20, color: colors.dim, fontSize: 13, textAlign: 'center' }}>No stream URL available</div>;
   }
 
   if (type === 'rtsp') {
     return (
-      <div style={{ padding: 16, color: '#94a3b8', fontSize: 13 }}>
+      <div style={{ padding: 16, color: colors.dim, fontSize: 13 }}>
         <div>🔒 RTSP stream cannot be played in-browser.</div>
         <div style={{ marginTop: 8 }}>
-          <a href={url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6', fontSize: 12 }}>Open in VLC / external player</a>
+          <a href={url} target="_blank" rel="noreferrer" style={{ color: colors.info, fontSize: 12 }}>Open in VLC / external player</a>
         </div>
       </div>
     );
@@ -296,12 +307,12 @@ function CameraPreview({ camera }: { camera: Camera }) {
 
   if (!isImg) {
     return (
-      <div style={{ padding: 16, color: '#94a3b8', fontSize: 13 }}>
+      <div style={{ padding: 16, color: colors.dim, fontSize: 13 }}>
         <div>📄 HTML page — cannot embed preview.</div>
         <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-          <a href={url} target="_blank" rel="noreferrer" style={{ color: '#3b82f6', fontSize: 12 }}>Open page</a>
+          <a href={url} target="_blank" rel="noreferrer" style={{ color: colors.info, fontSize: 12 }}>Open page</a>
           {camera.infoUrl && camera.infoUrl !== url && (
-            <a href={camera.infoUrl} target="_blank" rel="noreferrer" style={{ color: '#3b82f6', fontSize: 12 }}>Info</a>
+            <a href={camera.infoUrl} target="_blank" rel="noreferrer" style={{ color: colors.info, fontSize: 12 }}>Info</a>
           )}
         </div>
       </div>
@@ -311,7 +322,7 @@ function CameraPreview({ camera }: { camera: Camera }) {
   return (
     <div style={{ padding: 8 }}>
       {loading && (
-        <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', fontSize: 12 }}>
+        <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.muted, fontSize: 12 }}>
           Loading snapshot…
         </div>
       )}
@@ -321,7 +332,7 @@ function CameraPreview({ camera }: { camera: Camera }) {
           src={url}
           alt={camera.name}
           onClick={() => setLightbox(true)}
-          style={{ width: '100%', borderRadius: 6, display: loading ? 'none' : 'block', minHeight: 80, objectFit: 'cover', background: '#0f172a', cursor: 'zoom-in' }}
+          style={{ width: '100%', borderRadius: 6, display: loading ? 'none' : 'block', minHeight: 80, objectFit: 'cover', background: colors.base, cursor: 'zoom-in' }}
           onLoad={() => setLoading(false)}
           onError={() => {
             setLoading(false);
@@ -329,9 +340,9 @@ function CameraPreview({ camera }: { camera: Camera }) {
           }}
         />
       ) : (
-        <div style={{ padding: 20, color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
+        <div style={{ padding: 20, color: colors.dim, fontSize: 13, textAlign: 'center' }}>
           <div>❌ Image failed to load</div>
-          <div style={{ fontSize: 11, marginTop: 4, color: '#64748b' }}>Camera may be offline or requires auth</div>
+          <div style={{ fontSize: 11, marginTop: 4, color: colors.muted }}>Camera may be offline or requires auth</div>
         </div>
       )}
       {lightbox && <ImageLightbox src={url} onClose={() => setLightbox(false)} />}
@@ -342,9 +353,9 @@ function CameraPreview({ camera }: { camera: Camera }) {
             padding: '4px 10px',
             fontSize: 11,
             borderRadius: 4,
-            border: '1px solid #334155',
-            background: '#0f172a',
-            color: '#e2e8f0',
+            border: `1px solid ${colors.border}`,
+            background: colors.base,
+            color: colors.text,
             cursor: 'pointer',
           }}
         >
@@ -359,9 +370,9 @@ function CameraPreview({ camera }: { camera: Camera }) {
               padding: '4px 10px',
               fontSize: 11,
               borderRadius: 4,
-              border: '1px solid #334155',
-              background: '#0f172a',
-              color: '#3b82f6',
+              border: `1px solid ${colors.border}`,
+              background: colors.base,
+              color: colors.info,
               textDecoration: 'none',
               display: 'inline-block',
             }}
@@ -378,9 +389,9 @@ function CameraPreview({ camera }: { camera: Camera }) {
               padding: '4px 10px',
               fontSize: 11,
               borderRadius: 4,
-              border: '1px solid #334155',
-              background: '#0f172a',
-              color: '#3b82f6',
+              border: `1px solid ${colors.border}`,
+              background: colors.base,
+              color: colors.info,
               textDecoration: 'none',
               display: 'inline-block',
             }}
@@ -415,7 +426,7 @@ function MarkerClusterLayer({
         let size = 20 + Math.min(count * 2, 30);
         return L.divIcon({
           className: 'marker-cluster',
-          html: `<div style="width:${size}px;height:${size}px;background:rgba(59,130,246,0.8);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:bold;font-size:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">${count}</div>`,
+          html: `<div style="width:${size}px;height:${size}px;background:rgba(232,232,232,0.9);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#0a0a0a;font-weight:bold;font-size:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">${count}</div>`,
           iconSize: [size, size],
           iconAnchor: [size / 2, size / 2],
         });
@@ -426,13 +437,14 @@ function MarkerClusterLayer({
     for (const cam of cameras) {
       if (!cam.lat || !cam.lon) continue;
       const color = getCategoryColor(cam.category);
-      const marker = L.marker([cam.lat, cam.lon], { icon: createIcon(color) });
+      const glow = ALERT_CATEGORIES.has(cam.category.toLowerCase());
+      const marker = L.marker([cam.lat, cam.lon], { icon: createIcon(color, glow) });
       marker.bindPopup(
-        `<div style="min-width:220px;font-family:system-ui,sans-serif;">
+        `<div style="min-width:220px;">
           <strong style="font-size:13px;">${cam.name}</strong>
-          <div style="font-size:11px;color:#666;margin-top:4px;">${cam.country}${cam.region ? ` · ${cam.region}` : ''} · ${cam.category}</div>
-          ${cam.provider ? `<div style="font-size:10px;color:#999;margin-top:2px;">${cam.provider}</div>` : ''}
-          <div style="margin-top:6px;font-size:11px;color:#3b82f6;">👆 Click pin for live preview</div>
+          <div style="font-size:11px;color:var(--wm-dim);margin-top:4px;">${cam.country}${cam.region ? ` · ${cam.region}` : ''} · ${cam.category}</div>
+          ${cam.provider ? `<div style="font-size:10px;color:var(--wm-dim);margin-top:2px;">${cam.provider}</div>` : ''}
+          <div style="margin-top:6px;font-size:11px;color:var(--wm-info);">👆 Click pin for live preview</div>
         </div>`
       );
       if (onCameraClick) {
@@ -463,14 +475,14 @@ function EventLayer({ events }: { events: IntelEvent[] }) {
       if (!e.location) continue;
       const circle = L.circle([e.location.lat, e.location.lon], {
         radius: 5000,
-        color: e.confidence > 0.8 ? '#ef4444' : e.confidence > 0.5 ? '#f59e0b' : '#22c55e',
+        color: e.confidence > 0.8 ? colors.critical : e.confidence > 0.5 ? colors.high : colors.normal,
         fillOpacity: 0.25,
         weight: 2,
       }).bindPopup(
-        `<div style="min-width:180px;font-family:system-ui,sans-serif;">
+        `<div style="min-width:180px;">
           <strong>${e.title ?? e.kind}</strong>
           <div style="font-size:11px;margin-top:4px;">${e.content.slice(0, 120)}...</div>
-          <div style="font-size:10px;color:#666;margin-top:4px;">Confidence: ${Math.round(e.confidence * 100)}%</div>
+          <div style="font-size:10px;color:var(--wm-dim);margin-top:4px;">Confidence: ${Math.round(e.confidence * 100)}%</div>
         </div>`
       );
       circle.addTo(map);
@@ -573,10 +585,10 @@ function ResizablePanel({
         right: 20,
         width,
         maxHeight: '80vh',
-        background: '#1a1a2e',
+        background: colors.panel,
         borderRadius: 10,
-        border: '1px solid #334155',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+        border: `1px solid ${colors.border}`,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
         zIndex: 1000,
         display: 'flex',
         flexDirection: 'column',
@@ -587,7 +599,7 @@ function ResizablePanel({
       <div
         style={{
           padding: '12px 14px',
-          borderBottom: '1px solid #334155',
+          borderBottom: `1px solid ${colors.border}`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -595,10 +607,10 @@ function ResizablePanel({
         }}
       >
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: colors.accent, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {camera.name}
           </div>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+          <div style={{ fontSize: 11, color: colors.dim, marginTop: 2 }}>
             {camera.country}
             {camera.region ? ` · ${camera.region}` : ''} · {camera.category}
           </div>
@@ -609,7 +621,7 @@ function ResizablePanel({
             style={{
               background: 'transparent',
               border: 'none',
-              color: '#94a3b8',
+              color: colors.dim,
               fontSize: 14,
               cursor: 'pointer',
               lineHeight: 1,
@@ -630,7 +642,7 @@ function ResizablePanel({
             style={{
               background: 'transparent',
               border: 'none',
-              color: '#94a3b8',
+              color: colors.dim,
               fontSize: 18,
               cursor: 'pointer',
               lineHeight: 1,
@@ -665,7 +677,7 @@ function ResizablePanel({
             width: 20,
             height: 20,
             cursor: 'nwse-resize',
-            background: 'linear-gradient(135deg, transparent 50%, rgba(148,163,184,0.4) 50%)',
+            background: `linear-gradient(135deg, transparent 50%, rgba(${rgb(colors.dim)},0.4) 50%)`,
             borderBottomRightRadius: 10,
           }}
           title="Drag to resize"
@@ -854,7 +866,7 @@ export default function MapView() {
 
   if (loading) {
     return (
-      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a2e', color: '#fff' }}>
+      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: colors.base, color: colors.text }}>
         <div>Loading map...</div>
       </div>
     );
@@ -862,40 +874,40 @@ export default function MapView() {
 
   if (error) {
     return (
-      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a2e', color: '#ef4444' }}>
+      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: colors.base, color: colors.critical }}>
         <div>Error loading map: {error}</div>
       </div>
     );
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', background: '#111' }}>
+    <div style={{ height: '100%', display: 'flex', background: colors.bg2 }}>
       {/* Sidebar */}
       <div
         style={{
           width: 260,
-          background: '#1a1a2e',
-          color: '#e2e8f0',
+          background: colors.panel,
+          color: colors.text,
           padding: 16,
           display: 'flex',
           flexDirection: 'column',
           gap: 12,
           overflowY: 'auto',
-          borderRight: '1px solid #334155',
+          borderRight: `1px solid ${colors.border}`,
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 16, color: '#fff' }}>🗺️ Camera Map</h2>
+        <h2 style={{ margin: 0, fontSize: 16, color: colors.accent }}>🗺️ Camera Map</h2>
 
-        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+        <div style={{ fontSize: 12, color: colors.dim }}>
           {viewportLoading ? 'Loading viewport cameras...' : `Showing ${filtered.length.toLocaleString()} of ${stats.total.toLocaleString()} cameras in view`}
         </div>
         {mapZoom <= 3 && (
-          <div style={{ fontSize: 11, color: '#f59e0b', background: '#451a03', padding: '4px 8px', borderRadius: 4 }}>
+          <div style={{ fontSize: 11, color: colors.elevated, background: `rgba(${rgb(colors.elevated)},0.12)`, padding: '4px 8px', borderRadius: 4 }}>
             🔍 Zoom in to load cameras
           </div>
         )}
         {events.length > 0 && (
-          <div style={{ fontSize: 11, color: '#22c55e' }}>
+          <div style={{ fontSize: 11, color: colors.normal }}>
             📡 {events.length.toLocaleString()} intelligence events
           </div>
         )}
@@ -909,9 +921,9 @@ export default function MapView() {
           style={{
             padding: '8px 10px',
             borderRadius: 6,
-            border: '1px solid #334155',
-            background: '#0f172a',
-            color: '#e2e8f0',
+            border: `1px solid ${colors.border}`,
+            background: colors.base,
+            color: colors.text,
             fontSize: 13,
             outline: 'none',
           }}
@@ -931,11 +943,11 @@ export default function MapView() {
             <input type="checkbox" checked={showWindy} onChange={(e) => setShowWindy(e.target.checked)} />
             Windy ({stats.windy.toLocaleString()})
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: '#f59e0b' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: colors.elevated }}>
             <input type="checkbox" checked={showHlsOnly} onChange={(e) => setShowHlsOnly(e.target.checked)} />
             🔴 HLS Only ({stats.hls.toLocaleString()})
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: '#22c55e' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: colors.normal }}>
             <input type="checkbox" checked={showEvents} onChange={(e) => setShowEvents(e.target.checked)} />
             📡 Intelligence Events ({events.length.toLocaleString()})
           </label>
@@ -943,7 +955,7 @@ export default function MapView() {
 
         {/* Category filter */}
         <div>
-          <label style={{ fontSize: 11, textTransform: 'uppercase', color: '#94a3b8', letterSpacing: 0.5 }}>Category</label>
+          <label style={{ fontSize: 11, textTransform: 'uppercase', color: colors.dim, letterSpacing: 0.5 }}>Category</label>
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
@@ -952,9 +964,9 @@ export default function MapView() {
               marginTop: 4,
               padding: '6px 8px',
               borderRadius: 6,
-              border: '1px solid #334155',
-              background: '#0f172a',
-              color: '#e2e8f0',
+              border: `1px solid ${colors.border}`,
+              background: colors.base,
+              color: colors.text,
               fontSize: 13,
             }}
           >
@@ -969,7 +981,7 @@ export default function MapView() {
 
         {/* Country filter */}
         <div>
-          <label style={{ fontSize: 11, textTransform: 'uppercase', color: '#94a3b8', letterSpacing: 0.5 }}>Country</label>
+          <label style={{ fontSize: 11, textTransform: 'uppercase', color: colors.dim, letterSpacing: 0.5 }}>Country</label>
           <select
             value={selectedCountry}
             onChange={(e) => setSelectedCountry(e.target.value)}
@@ -978,9 +990,9 @@ export default function MapView() {
               marginTop: 4,
               padding: '6px 8px',
               borderRadius: 6,
-              border: '1px solid #334155',
-              background: '#0f172a',
-              color: '#e2e8f0',
+              border: `1px solid ${colors.border}`,
+              background: colors.base,
+              color: colors.text,
               fontSize: 13,
             }}
           >
@@ -997,10 +1009,10 @@ export default function MapView() {
         {showEventsFeed && events.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label style={{ fontSize: 11, textTransform: 'uppercase', color: '#94a3b8', letterSpacing: 0.5 }}>Intelligence Feed</label>
+              <label style={{ fontSize: 11, textTransform: 'uppercase', color: colors.dim, letterSpacing: 0.5 }}>Intelligence Feed</label>
               <button
                 onClick={() => setShowEventsFeed(false)}
-                style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: 11, cursor: 'pointer' }}
+                style={{ background: 'transparent', border: 'none', color: colors.dim, fontSize: 11, cursor: 'pointer' }}
               >
                 Hide
               </button>
@@ -1018,8 +1030,8 @@ export default function MapView() {
                 style={{
                   padding: '8px 10px',
                   borderRadius: 6,
-                  background: '#0f172a',
-                  border: '1px solid #1e293b',
+                  background: colors.base,
+                  border: `1px solid ${colors.borderSubtle}`,
                   cursor: ev.location ? 'pointer' : 'default',
                   fontSize: 12,
                   lineHeight: 1.4,
@@ -1032,16 +1044,16 @@ export default function MapView() {
                       width: 8,
                       height: 8,
                       borderRadius: '50%',
-                      background: ev.confidence > 0.8 ? '#ef4444' : ev.confidence > 0.5 ? '#f59e0b' : '#22c55e',
+                      background: ev.confidence > 0.8 ? colors.critical : ev.confidence > 0.5 ? colors.high : colors.normal,
                       display: 'inline-block',
                       flexShrink: 0,
                     }}
                   />
-                  <span style={{ color: '#e2e8f0', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ color: colors.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {ev.title ?? ev.kind}
                   </span>
                 </div>
-                <div style={{ color: '#64748b', fontSize: 10, marginLeft: 14 }}>
+                <div style={{ color: colors.muted, fontSize: 10, marginLeft: 14 }}>
                   {ev.kind} · {ev.confidence > 0.8 ? 'High' : ev.confidence > 0.5 ? 'Med' : 'Low'} confidence
                   {ev.location && ' · 📍'}
                 </div>
@@ -1054,8 +1066,8 @@ export default function MapView() {
             onClick={() => setShowEventsFeed(true)}
             style={{
               background: 'transparent',
-              border: '1px solid #334155',
-              color: '#94a3b8',
+              border: `1px solid ${colors.border}`,
+              color: colors.dim,
               fontSize: 11,
               padding: '6px 10px',
               borderRadius: 6,
@@ -1068,8 +1080,8 @@ export default function MapView() {
         )}
 
         {/* Legend */}
-        <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: '1px solid #334155' }}>
-          <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#94a3b8', letterSpacing: 0.5, marginBottom: 8 }}>Legend</div>
+        <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: `1px solid ${colors.border}` }}>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', color: colors.dim, letterSpacing: 0.5, marginBottom: 8 }}>Legend</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 10px' }}>
             {Object.entries(CATEGORY_COLORS).slice(0, 8).map(([cat, color]) => (
               <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
