@@ -6,6 +6,16 @@ import Hls from 'hls.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { colors, categoryColors, rgb } from '../lib/theme.js';
 import { getAircraft, getShips, type Aircraft, type Ship } from '../lib/api.js';
+import {
+  ALT_BANDS,
+  altBandFor,
+  altitudeToColor,
+  aircraftCategory,
+  shipCategory,
+  TrailStore,
+  type AircraftCat,
+  type ShipCat,
+} from '../lib/radar.js';
 
 interface Camera {
   name: string;
@@ -498,82 +508,211 @@ function EventLayer({ events }: { events: IntelEvent[] }) {
 }
 
 // ---- Live radar layers (ADS-B aircraft, AIS ships) ----------------------------
-// Lightweight rotated glyph markers over the dark basemap, refetched on map move.
+// Rotated, type-aware glyph markers colored by altitude band, with client-side
+// position trails. Refetched on map move; trail history lives in the component.
+// (Clean-room reimplementation of worldmonitor radar behaviors — see lib/radar.ts.)
 
-function aircraftIcon(heading: number | null, color: string) {
-  const rot = heading ?? 0;
-  // ✈ glyph points NE (~45°) by default; offset so 0° heading points north.
+// Aircraft glyphs vary by category; rotated so 0° heading points north.
+function aircraftGlyph(cat: AircraftCat, color: string, rot: number, highlight: boolean): string {
+  const ring = highlight ? `filter:drop-shadow(0 0 5px ${colors.accent});` : '';
+  const glow = `text-shadow:0 0 4px ${color},0 1px 2px #000;`;
+  switch (cat) {
+    case 'heli':
+      // Helicopter — non-directional rotor cross, no heading rotation.
+      return `<div style="font-size:15px;line-height:1;color:${color};${glow}${ring}">✛</div>`;
+    case 'ground':
+      // On-ground vehicle/taxiing — small square, no rotation.
+      return `<div style="width:7px;height:7px;background:${color};border:1px solid #000;${ring}"></div>`;
+    case 'prop':
+      // Prop/light — smaller plane glyph (✈ points NE by default → offset 45°).
+      return `<div style="transform:rotate(${rot - 45}deg);font-size:13px;line-height:1;color:${color};${glow}${ring}">✈</div>`;
+    case 'jet':
+    default:
+      // Jet/airliner — full-size plane glyph.
+      return `<div style="transform:rotate(${rot - 45}deg);font-size:18px;line-height:1;color:${color};${glow}${ring}">✈</div>`;
+  }
+}
+
+function aircraftIcon(a: Aircraft, highlight: boolean) {
+  const cat = aircraftCategory(a);
+  const color = altitudeToColor(a.alt);
+  const rot = a.heading ?? 0;
+  const sz = cat === 'jet' ? 20 : 16;
   return L.divIcon({
     className: 'radar-aircraft',
-    html: `<div style="transform:rotate(${rot - 45}deg);font-size:16px;line-height:1;color:${color};text-shadow:0 0 4px ${color},0 1px 2px #000;">✈</div>`,
-    iconSize: [16, 16],
-    iconAnchor: [8, 8],
+    html: aircraftGlyph(cat, color, rot, highlight),
+    iconSize: [sz, sz],
+    iconAnchor: [sz / 2, sz / 2],
   });
 }
 
-function shipIcon(heading: number | null, color: string) {
-  const rot = heading ?? 0;
-  // Triangle "wedge" pointing in the direction of travel (north at 0°).
+// Ship glyphs vary by category; the wedge points in the direction of travel.
+function shipGlyph(cat: ShipCat, color: string, rot: number, highlight: boolean): string {
+  const ring = highlight ? `filter:drop-shadow(0 0 5px ${colors.accent});` : `filter:drop-shadow(0 0 3px ${color});`;
+  if (cat === 'passenger') {
+    // Passenger/ferry — rounded dot with a heading wedge.
+    return `<div style="transform:rotate(${rot}deg);width:10px;height:10px;background:${color};border-radius:50%;border:1.5px solid #fff;${ring}"></div>`;
+  }
+  if (cat === 'tanker') {
+    // Tanker — wider, flatter wedge.
+    return `<div style="transform:rotate(${rot}deg);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid ${color};${ring}"></div>`;
+  }
+  // cargo / other — narrow wedge (cargo slightly larger).
+  const h = cat === 'cargo' ? 13 : 11;
+  return `<div style="transform:rotate(${rot}deg);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:${h}px solid ${color};${ring}"></div>`;
+}
+
+function shipIcon(s: Ship, highlight: boolean) {
+  const cat = shipCategory(s);
+  const color = colors.low;
+  const rot = s.heading ?? 0;
   return L.divIcon({
     className: 'radar-ship',
-    html: `<div style="transform:rotate(${rot}deg);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:12px solid ${color};filter:drop-shadow(0 0 3px ${color});"></div>`,
-    iconSize: [10, 12],
-    iconAnchor: [5, 6],
+    html: shipGlyph(cat, color, rot, highlight),
+    iconSize: [12, 13],
+    iconAnchor: [6, 6.5],
   });
 }
 
-function AircraftLayer({ aircraft }: { aircraft: Aircraft[] }) {
+function aircraftPopupHtml(a: Aircraft): string {
+  const band = altBandFor(a.alt);
+  return `<div style="min-width:170px;">
+      <strong style="font-size:13px;">✈ ${a.callsign ?? a.id}</strong>
+      <div style="font-size:11px;color:var(--wm-dim);margin-top:4px;">${a.type ?? 'Unknown type'} · ${aircraftCategory(a)}</div>
+      <div style="font-size:11px;color:var(--wm-dim);margin-top:2px;">
+        <span style="color:${band.color};">●</span> ${a.alt != null ? `${a.alt.toLocaleString()} ft (${band.label})` : 'alt —'}
+      </div>
+      <div style="font-size:11px;color:var(--wm-dim);margin-top:2px;">
+        ${a.speed != null ? `${Math.round(a.speed)} kt` : 'spd —'} ·
+        ${a.heading != null ? `${Math.round(a.heading)}° hdg` : 'hdg —'}
+      </div>
+    </div>`;
+}
+
+function shipPopupHtml(s: Ship): string {
+  return `<div style="min-width:170px;">
+      <strong style="font-size:13px;">🚢 ${s.name ?? s.id}</strong>
+      <div style="font-size:11px;color:var(--wm-dim);margin-top:4px;">MMSI ${s.id} · ${shipCategory(s)}${s.type ? ` (${s.type})` : ''}</div>
+      <div style="font-size:11px;color:var(--wm-dim);margin-top:2px;">
+        ${s.speed != null ? `${s.speed.toFixed(1)} kt` : 'spd —'} ·
+        ${s.heading != null ? `${Math.round(s.heading)}° hdg` : 'hdg —'}
+      </div>
+    </div>`;
+}
+
+function AircraftLayer({
+  aircraft,
+  trails,
+  followId,
+  onSelect,
+  onHover,
+  highlightId,
+}: {
+  aircraft: Aircraft[];
+  trails: TrailStore;
+  followId: string | null;
+  onSelect: (a: Aircraft | null) => void;
+  onHover: (id: string | null) => void;
+  highlightId: string | null;
+}) {
   const map = useMap();
   useEffect(() => {
-    const markers: L.Marker[] = [];
+    const layers: L.Layer[] = [];
     for (const a of aircraft) {
       if (!Number.isFinite(a.lat) || !Number.isFinite(a.lon)) continue;
-      const m = L.marker([a.lat, a.lon], { icon: aircraftIcon(a.heading, colors.teal), zIndexOffset: 500 });
-      m.bindPopup(
-        `<div style="min-width:160px;">
-          <strong style="font-size:13px;">✈ ${a.callsign ?? a.id}</strong>
-          <div style="font-size:11px;color:var(--wm-dim);margin-top:4px;">${a.type ?? 'Unknown type'}</div>
-          <div style="font-size:11px;color:var(--wm-dim);margin-top:2px;">
-            ${a.alt != null ? `${a.alt.toLocaleString()} ft` : 'alt —'} ·
-            ${a.speed != null ? `${Math.round(a.speed)} kt` : 'spd —'} ·
-            ${a.heading != null ? `${Math.round(a.heading)}°` : 'hdg —'}
-          </div>
-        </div>`,
-      );
+      const highlight = a.id === highlightId || a.id === followId;
+
+      // Fading trail polyline (altitude-colored), oldest → newest.
+      const pts = trails.get(a.id);
+      if (pts.length > 1) {
+        const line = L.polyline(
+          pts.map((p) => [p.lat, p.lon] as [number, number]),
+          {
+            color: altitudeToColor(a.alt),
+            weight: highlight ? 2.5 : 1.5,
+            opacity: highlight ? 0.85 : 0.5,
+            dashArray: '6 4',
+            interactive: false,
+          },
+        );
+        line.addTo(map);
+        layers.push(line);
+      }
+
+      const m = L.marker([a.lat, a.lon], { icon: aircraftIcon(a, highlight), zIndexOffset: highlight ? 900 : 500 });
+      m.bindPopup(aircraftPopupHtml(a));
+      m.on('mouseover', () => onHover(a.id));
+      m.on('mouseout', () => onHover(null));
+      m.on('click', () => onSelect(a));
       m.addTo(map);
-      markers.push(m);
+      layers.push(m);
     }
     return () => {
-      for (const m of markers) m.removeFrom(map);
+      for (const l of layers) l.removeFrom(map);
     };
-  }, [aircraft, map]);
+  }, [aircraft, trails, map, followId, onSelect, onHover, highlightId]);
   return null;
 }
 
-function ShipLayer({ ships }: { ships: Ship[] }) {
+function ShipLayer({
+  ships,
+  trails,
+  onHover,
+  highlightId,
+}: {
+  ships: Ship[];
+  trails: TrailStore;
+  onHover: (id: string | null) => void;
+  highlightId: string | null;
+}) {
   const map = useMap();
   useEffect(() => {
-    const markers: L.Marker[] = [];
+    const layers: L.Layer[] = [];
     for (const s of ships) {
       if (!Number.isFinite(s.lat) || !Number.isFinite(s.lon)) continue;
-      const m = L.marker([s.lat, s.lon], { icon: shipIcon(s.heading, colors.low), zIndexOffset: 400 });
-      m.bindPopup(
-        `<div style="min-width:160px;">
-          <strong style="font-size:13px;">🚢 ${s.name ?? s.id}</strong>
-          <div style="font-size:11px;color:var(--wm-dim);margin-top:4px;">MMSI ${s.id}${s.type ? ` · type ${s.type}` : ''}</div>
-          <div style="font-size:11px;color:var(--wm-dim);margin-top:2px;">
-            ${s.speed != null ? `${s.speed.toFixed(1)} kt` : 'spd —'} ·
-            ${s.heading != null ? `${Math.round(s.heading)}°` : 'hdg —'}
-          </div>
-        </div>`,
-      );
+      const highlight = s.id === highlightId;
+
+      const pts = trails.get(s.id);
+      if (pts.length > 1) {
+        const line = L.polyline(
+          pts.map((p) => [p.lat, p.lon] as [number, number]),
+          {
+            color: colors.low,
+            weight: highlight ? 2.5 : 1.5,
+            opacity: highlight ? 0.8 : 0.45,
+            dashArray: '5 4',
+            interactive: false,
+          },
+        );
+        line.addTo(map);
+        layers.push(line);
+      }
+
+      const m = L.marker([s.lat, s.lon], { icon: shipIcon(s, highlight), zIndexOffset: highlight ? 800 : 400 });
+      m.bindPopup(shipPopupHtml(s));
+      m.on('mouseover', () => onHover(s.id));
+      m.on('mouseout', () => onHover(null));
       m.addTo(map);
-      markers.push(m);
+      layers.push(m);
     }
     return () => {
-      for (const m of markers) m.removeFrom(map);
+      for (const l of layers) l.removeFrom(map);
     };
-  }, [ships, map]);
+  }, [ships, trails, map, onHover, highlightId]);
+  return null;
+}
+
+// Stable empty store reused when trails are disabled (avoids re-renders).
+const EMPTY_TRAILS = new TrailStore();
+
+// Keeps the map centered on a followed aircraft as positions refresh.
+function FollowController({ target }: { target: Aircraft | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (target && Number.isFinite(target.lat) && Number.isFinite(target.lon)) {
+      map.panTo([target.lat, target.lon], { animate: true, duration: 0.6 });
+    }
+  }, [target, map]);
   return null;
 }
 
@@ -802,6 +941,20 @@ export default function MapView() {
   const [ships, setShips] = useState<Ship[]>([]);
   const [radarLoading, setRadarLoading] = useState(false);
 
+  // Radar filters + interaction state.
+  const [altMin, setAltMin] = useState(0); // feet; aircraft below this hidden
+  const [altMax, setAltMax] = useState(50000); // feet; aircraft above this hidden
+  const [showTrails, setShowTrails] = useState(true);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [followed, setFollowed] = useState<Aircraft | null>(null);
+
+  // Client-side position trails (persist across refreshes). Stored in refs so
+  // pushing samples doesn't trigger re-renders; a bump counter forces re-draw.
+  const aircraftTrails = useRef(new TrailStore());
+  const shipTrails = useRef(new TrailStore());
+
+  const MAX_RENDERED = 600; // cap rendered markers per layer for performance
+
   // Fetch events + filter options once on mount
   useEffect(() => {
     let cancelled = false;
@@ -942,8 +1095,31 @@ export default function MapView() {
           showShips ? getShips(boundsStr, 1500).catch(() => [] as Ship[]) : Promise.resolve([] as Ship[]),
         ]);
         if (cancelled) return;
+
+        // Accumulate client-side trails, then evict ids no longer present.
+        const acIds = new Set<string>();
+        for (const a of ac) {
+          if (Number.isFinite(a.lat) && Number.isFinite(a.lon)) {
+            aircraftTrails.current.push(a.id, a.lat, a.lon);
+            acIds.add(a.id);
+          }
+        }
+        aircraftTrails.current.prune(acIds);
+
+        const shIds = new Set<string>();
+        for (const s of sh) {
+          if (Number.isFinite(s.lat) && Number.isFinite(s.lon)) {
+            shipTrails.current.push(s.id, s.lat, s.lon);
+            shIds.add(s.id);
+          }
+        }
+        shipTrails.current.prune(shIds);
+
         setAircraft(ac);
         setShips(sh);
+
+        // Keep the follow target's position fresh so the map can recenter.
+        setFollowed((prev) => (prev ? ac.find((a) => a.id === prev.id) ?? prev : prev));
       } finally {
         if (!cancelled) setRadarLoading(false);
       }
@@ -953,6 +1129,40 @@ export default function MapView() {
       clearTimeout(id);
     };
   }, [boundsStr, mapZoom, showAircraft, showShips]);
+
+  // Clear trails when a layer is turned off so they don't reappear stale.
+  useEffect(() => {
+    if (!showAircraft) aircraftTrails.current.clear();
+  }, [showAircraft]);
+  useEffect(() => {
+    if (!showShips) shipTrails.current.clear();
+  }, [showShips]);
+
+  // Aircraft that pass the altitude range filter + render cap.
+  const visibleAircraft = useMemo(() => {
+    const out = aircraft.filter((a) => {
+      const alt = a.alt ?? 0;
+      return alt >= altMin && alt <= altMax;
+    });
+    return out.length > MAX_RENDERED ? out.slice(0, MAX_RENDERED) : out;
+  }, [aircraft, altMin, altMax]);
+
+  const visibleShips = useMemo(
+    () => (ships.length > MAX_RENDERED ? ships.slice(0, MAX_RENDERED) : ships),
+    [ships],
+  );
+
+  // Per-category live counts for the control panel.
+  const aircraftCounts = useMemo(() => {
+    const c: Record<AircraftCat, number> = { jet: 0, prop: 0, heli: 0, ground: 0 };
+    for (const a of aircraft) c[aircraftCategory(a)]++;
+    return c;
+  }, [aircraft]);
+  const shipCounts = useMemo(() => {
+    const c: Record<ShipCat, number> = { cargo: 0, tanker: 0, passenger: 0, other: 0 };
+    for (const s of ships) c[shipCategory(s)]++;
+    return c;
+  }, [ships]);
 
   // Apply filters
   const isHlsCamera = useCallback((c: Camera) => {
@@ -1090,6 +1300,146 @@ export default function MapView() {
               : radarLoading
                 ? 'Updating live radar…'
                 : `Live radar: ${showAircraft ? `${aircraft.length} ✈` : ''}${showAircraft && showShips ? ' · ' : ''}${showShips ? `${ships.length} 🚢` : ''}`}
+          </div>
+        )}
+
+        {/* Radar control panel — altitude filter, trails, per-category counts */}
+        {(showAircraft || showShips) && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              padding: 10,
+              borderRadius: 8,
+              background: colors.base,
+              border: `1px solid ${colors.border}`,
+            }}
+          >
+            <div style={{ fontSize: 11, textTransform: 'uppercase', color: colors.dim, letterSpacing: 0.5 }}>
+              Radar Controls
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showTrails} onChange={(e) => setShowTrails(e.target.checked)} />
+              Trails
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  aircraftTrails.current.clear();
+                  shipTrails.current.clear();
+                  setHoveredId((h) => h); // nudge a re-render
+                }}
+                style={{
+                  marginLeft: 'auto',
+                  fontSize: 10,
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                  border: `1px solid ${colors.border}`,
+                  background: colors.panel,
+                  color: colors.dim,
+                  cursor: 'pointer',
+                }}
+                title="Clear all accumulated trails"
+              >
+                Clear
+              </button>
+            </label>
+
+            {showAircraft && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ fontSize: 11, color: colors.dim, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Altitude range</span>
+                  <span style={{ color: colors.text2 }}>
+                    {(altMin / 1000).toFixed(0)}k–{altMax >= 50000 ? '50k+' : `${(altMax / 1000).toFixed(0)}k`} ft
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={50000}
+                  step={1000}
+                  value={altMin}
+                  onChange={(e) => setAltMin(Math.min(Number(e.target.value), altMax))}
+                  style={{ width: '100%', accentColor: colors.teal }}
+                />
+                <input
+                  type="range"
+                  min={0}
+                  max={50000}
+                  step={1000}
+                  value={altMax}
+                  onChange={(e) => setAltMax(Math.max(Number(e.target.value), altMin))}
+                  style={{ width: '100%', accentColor: colors.teal }}
+                />
+                <div style={{ fontSize: 10, color: colors.muted, display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+                  <span>✈ jet {aircraftCounts.jet}</span>
+                  <span>prop {aircraftCounts.prop}</span>
+                  <span>heli {aircraftCounts.heli}</span>
+                  <span>grnd {aircraftCounts.ground}</span>
+                </div>
+              </div>
+            )}
+
+            {showShips && (
+              <div style={{ fontSize: 10, color: colors.muted, display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+                <span>🚢 cargo {shipCounts.cargo}</span>
+                <span>tanker {shipCounts.tanker}</span>
+                <span>pax {shipCounts.passenger}</span>
+                <span>other {shipCounts.other}</span>
+              </div>
+            )}
+
+            {/* Altitude band legend */}
+            {showAircraft && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+                <div style={{ fontSize: 10, textTransform: 'uppercase', color: colors.dim, letterSpacing: 0.5 }}>
+                  Altitude bands
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+                  {ALT_BANDS.map((b) => (
+                    <span key={b.key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: colors.text2 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 2, background: b.color, display: 'inline-block' }} />
+                      {b.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Followed-aircraft detail panel */}
+        {followed && (
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              background: colors.base,
+              border: `1px solid ${colors.teal}`,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: colors.teal }}>
+                📍 Following ✈ {followed.callsign ?? followed.id}
+              </span>
+              <button
+                onClick={() => setFollowed(null)}
+                style={{ background: 'transparent', border: 'none', color: colors.dim, fontSize: 14, cursor: 'pointer', lineHeight: 1 }}
+                title="Stop following"
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: colors.dim }}>
+              {followed.type ?? 'Unknown type'} · {aircraftCategory(followed)}
+            </div>
+            <div style={{ fontSize: 11, color: colors.dim, marginTop: 2 }}>
+              <span style={{ color: altBandFor(followed.alt).color }}>●</span>{' '}
+              {followed.alt != null ? `${followed.alt.toLocaleString()} ft` : 'alt —'} ·{' '}
+              {followed.speed != null ? `${Math.round(followed.speed)} kt` : 'spd —'} ·{' '}
+              {followed.heading != null ? `${Math.round(followed.heading)}°` : 'hdg —'}
+            </div>
           </div>
         )}
 
@@ -1243,8 +1593,25 @@ export default function MapView() {
           <MapBoundsListener onChange={(bounds, zoom) => { setBoundsStr(bounds); setMapZoom(zoom); }} />
           <MarkerClusterLayer cameras={filtered} onCameraClick={setSelectedCamera} />
           {showEvents && <EventLayer events={events} />}
-          {showAircraft && <AircraftLayer aircraft={aircraft} />}
-          {showShips && <ShipLayer ships={ships} />}
+          {showAircraft && (
+            <AircraftLayer
+              aircraft={visibleAircraft}
+              trails={showTrails ? aircraftTrails.current : EMPTY_TRAILS}
+              followId={followed?.id ?? null}
+              onSelect={(a) => setFollowed((prev) => (prev && a && prev.id === a.id ? null : a))}
+              onHover={setHoveredId}
+              highlightId={hoveredId}
+            />
+          )}
+          {showShips && (
+            <ShipLayer
+              ships={visibleShips}
+              trails={showTrails ? shipTrails.current : EMPTY_TRAILS}
+              onHover={setHoveredId}
+              highlightId={hoveredId}
+            />
+          )}
+          {showAircraft && followed && <FollowController target={followed} />}
           <MapFlyToListener />
         </MapContainer>
 
