@@ -1,4 +1,5 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
+import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -118,12 +119,45 @@ api.route('/mitre', mitreRoutes);
 api.route('/cv', cvRoutes);
 api.route('/signals', signalRoutes);
 api.route('/channels', channelRoutes);
+// Brief + digest, shared between /api (the web console fetches /api/brief/:userId)
+// and the root (Samaritan system-prompt injection).
+async function briefHandler(c: Context) {
+  const userId = c.req.param('userId');
+  const brief = (await latestBrief(userId)) ?? (await latestBrief(undefined));
+  return c.json({ brief: brief ?? null });
+}
+async function digestHandler(c: Context) {
+  const queryParam = c.req.query('query') ?? '';
+  const { searchEvents } = await import('./store/events.js');
+  const since = Date.now() - 15 * 60 * 1000; // last 15 minutes
+  const events = await searchEvents({ query: queryParam, since, limit: 10 });
+  if (events.length === 0) return c.json({ digest: null });
+  const lines = events.map((e) => {
+    const time = new Date(e.eventAt).toLocaleTimeString();
+    return `[${time}] ${e.title ?? e.kind}: ${e.content.slice(0, 200)}`;
+  });
+  return c.json({
+    digest: lines.join('\n'),
+    eventCount: events.length,
+    sources: [...new Set(events.map((e) => e.sourceId))],
+  });
+}
+api.get('/brief/:userId', briefHandler);
+api.get('/digest/:userId', digestHandler);
 app.route('/api', api);
 
-// Static files
-app.use('/*', serveStatic({ root: './web/dist' }));
+app.get('/brief/:userId', briefHandler);
+app.get('/digest/:userId', digestHandler);
 
-// SPA fallback
+// Ingest endpoint (bidirectional: Samaritan can push intel back)
+app.post('/ingest', async (c) => {
+  const body = await c.req.json();
+  return c.json({ received: true, id: body.id ?? 'pending' }, 202);
+});
+
+// Static files + SPA fallback — registered LAST so the catch-all wildcard does not
+// shadow the API / brief / digest GET routes above.
+app.use('/*', serveStatic({ root: './web/dist' }));
 app.get('*', (c) => {
   try {
     const html = readFileSync('./web/dist/index.html', 'utf-8');
@@ -131,44 +165,6 @@ app.get('*', (c) => {
   } catch {
     return c.json({ error: 'Web UI not built. Run npm run build in web/' }, 503);
   }
-});
-
-// Digest endpoint for Samaritan system prompt injection
-app.get('/digest/:userId', async (c) => {
-  const queryParam = c.req.query('query') ?? '';
-
-  const { searchEvents } = await import('./store/events.js');
-  const since = Date.now() - 15 * 60 * 1000; // last 15 minutes
-  const events = await searchEvents({ query: queryParam, since, limit: 10 });
-
-  if (events.length === 0) {
-    return c.json({ digest: null });
-  }
-
-  const lines = events.map((e) => {
-    const time = new Date(e.eventAt).toLocaleTimeString();
-    return `[${time}] ${e.title ?? e.kind}: ${e.content.slice(0, 200)}`;
-  });
-
-  return c.json({
-    digest: lines.join('\\n'),
-    eventCount: events.length,
-    sources: [...new Set(events.map((e) => e.sourceId))],
-  });
-});
-
-// Latest synthesized (grounded) brief for a user, falling back to the global brief.
-// Pull-delivery surface for Samaritan system-prompt injection.
-app.get('/brief/:userId', async (c) => {
-  const userId = c.req.param('userId');
-  const brief = (await latestBrief(userId)) ?? (await latestBrief(undefined));
-  return c.json({ brief: brief ?? null });
-});
-
-// Ingest endpoint (bidirectional: Samaritan can push intel back)
-app.post('/ingest', async (c) => {
-  const body = await c.req.json();
-  return c.json({ received: true, id: body.id ?? 'pending' }, 202);
 });
 
 // 404 fallback
@@ -182,37 +178,11 @@ app.onError((err, c) => {
 
 const port = parseInt(config.PORT, 10);
 
-// Node.js HTTP server (works in Node 22, no Bun required)
-const { createServer } = await import('node:http');
-const server = createServer(async (req, res) => {
-  const chunks: Buffer[] = [];
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    req.on('data', (chunk) => chunks.push(chunk));
-    await new Promise<void>((resolve) => req.on('end', resolve));
-  }
-
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value)) {
-      for (const v of value) headers.append(key, v);
-    } else {
-      headers.set(key, value);
-    }
-  }
-
-  const request = new Request(`http://${req.headers.host}${req.url}`, {
-    method: req.method,
-    headers,
-    body: chunks.length > 0 ? Buffer.concat(chunks) : undefined,
-  });
-
-  const response = await app.fetch(request);
-  res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
-  res.end(await response.text());
-});
-
-server.listen(port, () => {
+// @hono/node-server streams responses correctly — including SSE / text/event-stream.
+// The previous hand-rolled server did `res.end(await response.text())`, which
+// buffers the entire body and therefore can NEVER flush an open event stream
+// (that's why the Live tab showed "disconnected").
+const server = serve({ fetch: app.fetch, port }, () => {
   console.log(`[feeder] Server listening on port ${port}`);
 });
 
