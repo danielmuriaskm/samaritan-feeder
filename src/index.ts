@@ -4,6 +4,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { authMiddleware } from './middleware/auth.js';
+import { verifyHandshake, issueFeederSession } from './auth/feederSession.js';
 import { readFileSync } from 'node:fs';
 import { config } from './config.js';
 import { pool } from './db.js';
@@ -153,6 +154,19 @@ app.get('/digest/:userId', digestHandler);
 app.post('/ingest', async (c) => {
   const body = await c.req.json();
   return c.json({ received: true, id: body.id ?? 'pending' }, 202);
+});
+
+// SSO handshake landing. Samaritan's /auth/sso redirects here with a short-lived token
+// (aud 'feeder-sso', signed with the shared secret). Verify it, set this origin's own
+// session cookie, then bounce to the console — so a Samaritan-logged-in user never sees
+// the feeder's own login. (Exempted from the auth middleware in middleware/auth.ts.)
+app.get('/auth/sso/callback', async (c) => {
+  const session = await verifyHandshake(c.req.query('token') ?? '');
+  if (!session) {
+    return c.html('<p>SSO failed: invalid or expired token. Log into Samaritan, then retry.</p>', 401);
+  }
+  await issueFeederSession(c, { uid: session.uid, email: session.email });
+  return c.redirect('/', 302);
 });
 
 // Static files + SPA fallback — registered LAST so the catch-all wildcard does not
