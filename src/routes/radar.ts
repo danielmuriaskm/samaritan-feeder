@@ -16,6 +16,7 @@ import { getAircraftInBbox, type Bbox } from '../radar/adsb.js';
 import { getShipsInBbox } from '../radar/ais.js';
 import { getWebcamsInBounds } from '../geo/webcamLibrary.js';
 import { getIpCamerasInBounds } from '../geo/ipCameraLibrary.js';
+import { countCameras } from '../geo/cameraStore.js';
 
 const app = new Hono();
 
@@ -85,10 +86,15 @@ interface CameraMarker {
   streamType?: string | null;
 }
 
-/** Merge the webcam + IP-camera libraries within the bbox into one marker list. */
-function cameraMarkersInBbox(bbox: Bbox): CameraMarker[] {
+/** Merge the webcam + IP-camera libraries within the bbox into one marker list.
+ * Two indexed GIST bbox queries (each capped at `limit`), run in parallel. */
+async function cameraMarkersInBbox(bbox: Bbox, limit: number): Promise<CameraMarker[]> {
+  const [webcams, ipcams] = await Promise.all([
+    getWebcamsInBounds(bbox.minLat, bbox.minLon, bbox.maxLat, bbox.maxLon, limit),
+    getIpCamerasInBounds(bbox.minLat, bbox.minLon, bbox.maxLat, bbox.maxLon, limit),
+  ]);
   const out: CameraMarker[] = [];
-  for (const w of getWebcamsInBounds(bbox.minLat, bbox.minLon, bbox.maxLat, bbox.maxLon)) {
+  for (const w of webcams) {
     out.push({
       id: `webcam:${w.name}`,
       name: w.name,
@@ -103,7 +109,7 @@ function cameraMarkersInBbox(bbox: Bbox): CameraMarker[] {
       streamType: w.streamType,
     });
   }
-  for (const ip of getIpCamerasInBounds(bbox.minLat, bbox.minLon, bbox.maxLat, bbox.maxLon)) {
+  for (const ip of ipcams) {
     out.push({
       id: `ip:${ip.name}`,
       name: ip.name,
@@ -127,18 +133,15 @@ app.get('/markers', async (c) => {
     return c.json({ error: 'Invalid bbox. Use bbox=minLat,minLon,maxLat,maxLon' }, 400);
   }
   const limit = parseLimit(c.req.query('limit'));
-  const all = cameraMarkersInBbox(bbox);
+  const all = await cameraMarkersInBbox(bbox, limit);
   return c.json({ markers: all.slice(0, limit), total: all.length });
 });
 
 app.get('/count', async (c) => {
-  // bbox optional: with one, count in view; without, count everything.
+  // bbox optional: with one, count in view; without, count everything. A single
+  // indexed COUNT (markers = all cameras), not a full marker materialization.
   const bbox = parseBbox(c.req.query('bbox'));
-  if (bbox) {
-    return c.json({ count: cameraMarkersInBbox(bbox).length });
-  }
-  const world: Bbox = { minLat: -90, minLon: -180, maxLat: 90, maxLon: 180 };
-  return c.json({ count: cameraMarkersInBbox(world).length });
+  return c.json({ count: await countCameras(bbox ?? undefined) });
 });
 
 export default app;
