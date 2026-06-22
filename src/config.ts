@@ -23,6 +23,11 @@ const schema = z.object({
   /** Enable TLS for Postgres (required by Supabase/managed PG). Relaxed verify
    * (rejectUnauthorized:false) since managed poolers present their own CA. */
   DATABASE_SSL: boolFlag(false),
+  /** Schema search_path set explicitly on every connection. The feeder's tables
+   * live in the `samaritan` schema in shared deployments; queries are unqualified,
+   * and a role-default search_path doesn't reliably survive a pooler — so set it
+   * per-connection. `public` is included so a single-schema local dev DB also works. */
+  DB_SEARCH_PATH: z.string().default('samaritan,public,extensions'),
   SAMARITAN_BASE_URL: z.string().url().default('http://localhost:3001'),
   SAMARITAN_AUTH_TOKEN: z.string().min(1),
   REDIS_URL: z.string().optional(),
