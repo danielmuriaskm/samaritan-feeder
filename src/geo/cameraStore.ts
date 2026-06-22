@@ -42,7 +42,10 @@ export type CameraRecord = {
 // rest. `c.` prefix because the table is aliased `c` in every query below.
 const IP_PREDICATE =
   "(c.category in ('insecam_17k','insecam_global','github_insecam','insecam_rtsp_speculative') or c.stream_type = 'rtsp')";
-const pred = (kind: CameraKind): string => (kind === 'ip' ? IP_PREDICATE : `not ${IP_PREDICATE}`);
+// Exclude cameras the liveness sweeper has marked dead (dead_at set) — ~42k of 199k.
+// Applied to every kind-filtered query so the map/browse/counts only show live cams.
+const LIVE = 'c.dead_at is null';
+const pred = (kind: CameraKind): string => `${LIVE} and ${kind === 'ip' ? IP_PREDICATE : `not ${IP_PREDICATE}`}`;
 
 const COLS =
   'c.name, c.country, c.region, c.lat, c.lon, c.info_url as "infoUrl", c.stream_url as "streamUrl", ' +
@@ -145,11 +148,11 @@ export async function countCameras(bbox?: {
 }): Promise<number> {
   if (bbox) {
     const rows = await query<{ n: string }>(
-      `select count(*)::int as n from public.cameras c where c.geog && ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography`,
+      `select count(*)::int as n from public.cameras c where ${LIVE} and c.geog && ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography`,
       [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat],
     );
     return Number(rows[0]?.n ?? 0);
   }
-  const rows = await query<{ n: string }>('select count(*)::int as n from public.cameras');
+  const rows = await query<{ n: string }>(`select count(*)::int as n from public.cameras c where ${LIVE}`);
   return Number(rows[0]?.n ?? 0);
 }
