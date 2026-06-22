@@ -1,23 +1,7 @@
 import { useState } from 'react';
 import { useEventStream } from '../lib/useSSE.js';
 import type { IntelEvent, IntelSignal } from '../lib/types.js';
-
-const kindColors: Record<string, string> = {
-  visual: '#3b82f6',
-  text: '#22c55e',
-  anomaly: '#ef4444',
-  alert: '#dc2626',
-  social_post: '#8b5cf6',
-};
-
-const signalKindColors: Record<string, string> = {
-  convergence: '#0ea5e9',
-  geo_convergence: '#14b8a6',
-  velocity_spike: '#f59e0b',
-  silent_source: '#6b7280',
-  volume_anomaly: '#ec4899',
-  cluster_surge: '#ef4444',
-};
+import { colors, kindColors, signalColors, scoreColor } from '../lib/theme.js';
 
 const signalKindIcons: Record<string, string> = {
   convergence: '🔀',
@@ -28,25 +12,14 @@ const signalKindIcons: Record<string, string> = {
   cluster_surge: '🚨',
 };
 
-// Score 0..1 (event.score) rendered as a 0-100 pill with a heat color.
-function scoreColor(score: number): string {
-  if (score >= 0.8) return '#dc2626';
-  if (score >= 0.6) return '#ea580c';
-  if (score >= 0.4) return '#d97706';
-  if (score >= 0.2) return '#65a30d';
-  return '#16a34a';
-}
-
 function ScorePill({ score }: { score: number }) {
   return (
     <span
+      className="wm-chip"
       style={{
         fontSize: 11,
         fontWeight: 700,
-        padding: '2px 8px',
-        borderRadius: 999,
         background: scoreColor(score),
-        color: '#fff',
         fontVariantNumeric: 'tabular-nums',
       }}
     >
@@ -70,37 +43,28 @@ function relativeTime(ts: number): string {
 
 function EventRow({ event }: { event: IntelEvent }) {
   return (
-    <div
-      style={{
-        padding: 14,
-        borderRadius: 8,
-        border: '1px solid #e5e7eb',
-        background: '#fff',
-      }}
-    >
+    <div className="wm-card" style={{ padding: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
         <span
+          className="wm-chip"
           style={{
             fontSize: 11,
             fontWeight: 600,
             textTransform: 'uppercase',
-            padding: '2px 8px',
-            borderRadius: 4,
-            background: kindColors[event.kind] ?? '#999',
-            color: '#fff',
+            background: kindColors[event.kind] ?? colors.dim,
           }}
         >
           {event.kind}
         </span>
         {event.score != null && <ScorePill score={event.score} />}
-        <span style={{ fontSize: 12, color: '#6b7280' }}>{event.sourceId}</span>
-        <span style={{ fontSize: 12, color: '#666', marginLeft: 'auto' }}>{relativeTime(event.eventAt)}</span>
+        <span className="wm-meta" style={{ fontSize: 12 }}>{event.sourceId}</span>
+        <span className="wm-meta" style={{ fontSize: 12, marginLeft: 'auto' }}>{relativeTime(event.eventAt)}</span>
       </div>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{event.title ?? 'Untitled'}</div>
       <div
         style={{
           fontSize: 13,
-          color: '#374151',
+          color: 'var(--wm-text-2)',
           lineHeight: 1.5,
           overflow: 'hidden',
           display: '-webkit-box',
@@ -111,7 +75,7 @@ function EventRow({ event }: { event: IntelEvent }) {
         {event.content}
       </div>
       {event.location && (
-        <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>
+        <div style={{ marginTop: 6, fontSize: 12, color: 'var(--wm-dim)' }}>
           📍 {event.location.lat.toFixed(4)}, {event.location.lon.toFixed(4)}
         </div>
       )}
@@ -122,38 +86,34 @@ function EventRow({ event }: { event: IntelEvent }) {
 function SignalRow({ signal }: { signal: IntelSignal }) {
   return (
     <div
+      className="wm-card"
       style={{
         padding: 12,
-        borderRadius: 8,
-        border: '1px solid #e5e7eb',
-        borderLeft: `4px solid ${signalKindColors[signal.kind] ?? '#999'}`,
-        background: '#fff',
+        borderLeft: `4px solid ${signalColors[signal.kind] ?? colors.dim}`,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 14 }}>{signalKindIcons[signal.kind] ?? '📡'}</span>
         <span
+          className="wm-chip"
           style={{
             fontSize: 10,
             fontWeight: 600,
             textTransform: 'uppercase',
-            padding: '2px 6px',
-            borderRadius: 4,
-            background: signalKindColors[signal.kind] ?? '#999',
-            color: '#fff',
+            background: signalColors[signal.kind] ?? colors.dim,
           }}
         >
           {signal.kind.replace('_', ' ')}
         </span>
-        <span style={{ fontSize: 12, color: '#666', marginLeft: 'auto' }}>
+        <span style={{ marginLeft: 'auto' }}>
           <ScorePill score={signal.score} />
         </span>
       </div>
       <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{signal.title}</div>
       {signal.summary && (
-        <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.4 }}>{signal.summary}</div>
+        <div style={{ fontSize: 12, color: 'var(--wm-dim)', lineHeight: 1.4 }}>{signal.summary}</div>
       )}
-      <div style={{ marginTop: 4, fontSize: 11, color: '#9ca3af' }}>{relativeTime(signal.createdAt)}</div>
+      <div className="wm-meta" style={{ marginTop: 4, fontSize: 11 }}>{relativeTime(signal.createdAt)}</div>
     </div>
   );
 }
@@ -168,21 +128,18 @@ export default function LiveFeed() {
       <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span
+            className={connected ? 'wm-dot wm-dot--glow wm-live-dot' : 'wm-dot'}
             style={{
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              background: connected ? '#22c55e' : '#ef4444',
-              boxShadow: connected ? '0 0 6px #22c55e' : 'none',
-              display: 'inline-block',
+              background: connected ? colors.live : colors.critical,
+              color: connected ? colors.live : colors.critical,
             }}
           />
-          <span style={{ fontSize: 13, fontWeight: 600, color: connected ? '#16a34a' : '#dc2626' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: connected ? 'var(--wm-live)' : 'var(--wm-critical)' }}>
             {connected ? 'Live' : 'Disconnected'}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 220 }}>
-          <span style={{ fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap' }}>
+          <span className="wm-meta" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
             min score {(minScore * 100).toFixed(0)}
           </span>
           <input
@@ -195,7 +152,7 @@ export default function LiveFeed() {
             style={{ flex: 1, maxWidth: 260, cursor: 'pointer' }}
           />
         </div>
-        <span style={{ fontSize: 12, color: '#666', marginLeft: 'auto' }}>
+        <span className="wm-meta" style={{ fontSize: 12, marginLeft: 'auto' }}>
           {events.length} event{events.length === 1 ? '' : 's'} · {signals.length} signal
           {signals.length === 1 ? '' : 's'}
         </span>
@@ -205,10 +162,10 @@ export default function LiveFeed() {
       <div style={{ display: 'flex', gap: 16, flex: 1, minHeight: 0 }}>
         {/* Events */}
         <div style={{ flex: 2, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 }}>⚡ Incoming events</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--wm-text)', marginBottom: 8 }}>⚡ Incoming events</div>
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingRight: 4 }}>
             {events.length === 0 ? (
-              <div style={{ fontSize: 13, color: '#9ca3af', padding: 20, textAlign: 'center' }}>
+              <div style={{ fontSize: 13, color: 'var(--wm-muted)', padding: 20, textAlign: 'center' }}>
                 Waiting for live events…
               </div>
             ) : (
@@ -219,10 +176,10 @@ export default function LiveFeed() {
 
         {/* Signals */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 }}>🔔 Signals</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--wm-text)', marginBottom: 8 }}>🔔 Signals</div>
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, paddingRight: 4 }}>
             {signals.length === 0 ? (
-              <div style={{ fontSize: 13, color: '#9ca3af', padding: 20, textAlign: 'center' }}>
+              <div style={{ fontSize: 13, color: 'var(--wm-muted)', padding: 20, textAlign: 'center' }}>
                 No signals yet…
               </div>
             ) : (

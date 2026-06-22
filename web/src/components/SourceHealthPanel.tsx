@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getSources } from '../lib/api.js';
 import type { Source, SourceHealthState } from '../lib/types.js';
+import { healthColors, colors, rgb } from '../lib/theme.js';
 
 // Source-kind emoji icons (mirrors EventFeed.tsx / SourcePanel.tsx idiom).
 const sourceKindIcons: Record<string, string> = {
@@ -13,13 +14,7 @@ const sourceKindIcons: Record<string, string> = {
 };
 
 // healthState -> chip color. silent/failing/cooldown are the feeds we want to surface.
-const STATE_COLORS: Record<SourceHealthState, string> = {
-  healthy: '#22c55e',
-  degraded: '#f59e0b',
-  silent: '#f97316',
-  failing: '#ef4444',
-  cooldown: '#dc2626',
-};
+// Sourced from theme.ts `healthColors`.
 
 const STATE_LABELS: Record<SourceHealthState, string> = {
   healthy: 'Healthy',
@@ -81,14 +76,11 @@ function countdown(until: number | undefined, now: number): string | null {
 function StateChip({ state }: { state: SourceHealthState }) {
   return (
     <span
+      className="wm-chip"
       style={{
-        fontSize: 11,
-        fontWeight: 600,
         textTransform: 'uppercase',
-        padding: '2px 8px',
-        borderRadius: 4,
-        background: STATE_COLORS[state],
-        color: '#fff',
+        color: healthColors[state],
+        borderColor: healthColors[state],
         whiteSpace: 'nowrap',
       }}
     >
@@ -99,8 +91,8 @@ function StateChip({ state }: { state: SourceHealthState }) {
 
 function MetaItem({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
   return (
-    <span style={{ fontSize: 12, color: danger ? '#dc2626' : '#6b7280', whiteSpace: 'nowrap' }}>
-      <span style={{ color: danger ? '#dc2626' : '#9ca3af' }}>{label}: </span>
+    <span className="wm-meta" style={{ fontSize: 12, color: danger ? 'var(--wm-critical)' : 'var(--wm-dim)', whiteSpace: 'nowrap' }}>
+      <span style={{ color: danger ? 'var(--wm-critical)' : 'var(--wm-muted)' }}>{label}: </span>
       <span style={{ fontWeight: danger ? 600 : 400 }}>{value}</span>
     </span>
   );
@@ -170,12 +162,12 @@ export default function SourceHealthPanel() {
     <div style={{ padding: 20, maxWidth: 1000, margin: '0 auto', height: '100%', overflowY: 'auto', width: '100%' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>🩺 Source Health</h2>
-        <span style={{ fontSize: 13, color: '#6b7280' }}>
+        <h2 style={{ margin: 0, fontSize: 18, color: 'var(--wm-text)' }}>🩺 Source Health</h2>
+        <span style={{ fontSize: 13, color: 'var(--wm-dim)' }}>
           {loading ? 'Loading...' : `${tracked.length} active feed${tracked.length === 1 ? '' : 's'} · refreshes every 30s`}
         </span>
         {alertCount > 0 && (
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#dc2626', marginLeft: 'auto' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--wm-critical)', marginLeft: 'auto' }}>
             ⚠️ {alertCount} feed{alertCount === 1 ? '' : 's'} need attention
           </span>
         )}
@@ -183,38 +175,43 @@ export default function SourceHealthPanel() {
 
       {/* Summary strip: counts per state */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
-        {STATE_ORDER.map((state) => (
-          <div
-            key={state}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '8px 14px',
-              borderRadius: 8,
-              border: '1px solid #e5e7eb',
-              background: counts[state] > 0 && ALERT_STATES.has(state) ? '#fef2f2' : '#fff',
-            }}
-          >
-            <span style={{ width: 10, height: 10, borderRadius: '50%', background: STATE_COLORS[state] }} />
-            <span style={{ fontSize: 20, fontWeight: 700, color: counts[state] > 0 ? '#111' : '#9ca3af' }}>
-              {counts[state]}
-            </span>
-            <span style={{ fontSize: 12, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.4 }}>
-              {STATE_LABELS[state]}
-            </span>
-          </div>
-        ))}
+        {STATE_ORDER.map((state) => {
+          const isAlert = counts[state] > 0 && ALERT_STATES.has(state);
+          return (
+            <div
+              key={state}
+              className="wm-card"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 14px',
+                background: isAlert ? `rgba(${rgb(healthColors[state])}, 0.10)` : undefined,
+              }}
+            >
+              <span
+                className={`wm-dot${isAlert ? ' wm-dot--glow' : ''}`}
+                style={{ background: healthColors[state], color: healthColors[state] }}
+              />
+              <span style={{ fontSize: 20, fontWeight: 700, color: counts[state] > 0 ? 'var(--wm-text)' : 'var(--wm-muted)' }}>
+                {counts[state]}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--wm-dim)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                {STATE_LABELS[state]}
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       {error && (
-        <div style={{ padding: '10px 12px', borderRadius: 6, background: '#fef2f2', color: '#dc2626', fontSize: 13, marginBottom: 16 }}>
+        <div style={{ padding: '10px 12px', borderRadius: 4, background: `rgba(${rgb(colors.critical)}, 0.10)`, color: 'var(--wm-critical)', fontSize: 13, marginBottom: 16 }}>
           {error}
         </div>
       )}
 
       {!loading && tracked.length === 0 && !error && (
-        <div style={{ color: '#6b7280', padding: 40, textAlign: 'center' }}>No active sources to monitor.</div>
+        <div style={{ color: 'var(--wm-dim)', padding: 40, textAlign: 'center' }}>No active sources to monitor.</div>
       )}
 
       {/* Source cards (sorted worst-first) */}
@@ -227,15 +224,15 @@ export default function SourceHealthPanel() {
           return (
             <div
               key={source.id}
+              className="wm-card"
               style={{
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: 12,
                 padding: '12px 16px',
-                borderRadius: 8,
-                border: isAlert ? `1px solid ${STATE_COLORS[state]}` : '1px solid #e5e7eb',
-                background: isAlert ? '#fff7f5' : '#fff',
-                borderLeft: `4px solid ${STATE_COLORS[state]}`,
+                border: isAlert ? `1px solid ${healthColors[state]}` : undefined,
+                background: isAlert ? `rgba(${rgb(healthColors[state])}, 0.10)` : undefined,
+                borderLeft: `3px solid ${healthColors[state]}`,
               }}
             >
               <div style={{ fontSize: 22, lineHeight: 1, paddingTop: 2 }}>
@@ -245,20 +242,17 @@ export default function SourceHealthPanel() {
                 {/* Title row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
                   {isAlert && <span title="Needs attention">🚨</span>}
-                  <span style={{ fontWeight: 600, fontSize: 14, color: '#1e293b' }}>{source.name}</span>
+                  <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--wm-text)' }}>{source.name}</span>
                   <StateChip state={state} />
-                  <span style={{ fontSize: 11, color: '#9ca3af', textTransform: 'capitalize' }}>
+                  <span style={{ fontSize: 11, color: 'var(--wm-muted)', textTransform: 'capitalize' }}>
                     {source.kind.replace(/_/g, ' ')}
                   </span>
                   {cd && (
                     <span
+                      className="wm-chip wm-meta"
                       style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        background: '#fee2e2',
-                        color: '#dc2626',
+                        color: 'var(--wm-critical)',
+                        borderColor: 'var(--wm-critical)',
                         marginLeft: 'auto',
                       }}
                     >

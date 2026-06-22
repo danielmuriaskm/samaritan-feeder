@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { colors, fonts } from '../lib/theme.js';
 
 interface MatrixCell {
   id: string;
@@ -73,7 +74,7 @@ export default function MitreMatrixView() {
 
   if (loading) {
     return (
-      <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+      <div style={{ padding: 40, textAlign: 'center', color: colors.dim }}>
         Loading MITRE ATT&CK matrix...
       </div>
     );
@@ -81,33 +82,34 @@ export default function MitreMatrixView() {
 
   if (!data) {
     return (
-      <div style={{ padding: 40, textAlign: 'center', color: '#ef4444' }}>
+      <div style={{ padding: 40, textAlign: 'center', color: colors.critical }}>
         Failed to load MITRE ATT&CK data.
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', height: '100%', background: '#f8fafc' }}>
+    <div style={{ display: 'flex', height: '100%' }}>
       {/* Matrix */}
       <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
-        <h2 style={{ margin: '0 0 16px', fontSize: 20, color: '#1e293b' }}>
+        <h2 style={{ margin: '0 0 16px', fontSize: 20, color: colors.text }}>
           🛡️ MITRE ATT&CK Matrix
         </h2>
 
         <div style={{ display: 'flex', gap: 12, minWidth: 1200 }}>
           {data.tactics.map((tactic) => {
             const cells = data.matrix[tactic] ?? [];
-            const color = TACTIC_COLORS[tactic] || '#64748b';
+            const color = TACTIC_COLORS[tactic] || colors.muted;
 
             return (
               <div key={tactic} style={{ flex: 1, minWidth: 140 }}>
                 <div
+                  className="wm-card"
                   style={{
-                    background: color,
-                    color: '#fff',
+                    color,
+                    borderTop: `3px solid ${color}`,
+                    borderRadius: '4px 4px 0 0',
                     padding: '8px 10px',
-                    borderRadius: '6px 6px 0 0',
                     fontSize: 12,
                     fontWeight: 600,
                     textAlign: 'center',
@@ -122,8 +124,13 @@ export default function MitreMatrixView() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4 }}>
                   {cells.slice(0, 20).map((cell) => {
                     const intensity = cell.eventCount / maxCount;
-                    const bgColor = intensity > 0 ? `rgba(${hexToRgb(color)}, ${0.1 + intensity * 0.85})` : '#f1f5f9';
-                    const textColor = intensity > 0.5 ? '#fff' : '#334155';
+                    const bgColor = intensity > 0 ? `rgba(255, 255, 255, ${0.04 + intensity * 0.5})` : 'transparent';
+                    const textColor = intensity > 0.6 ? colors.base : colors.text;
+                    const borderColor = selectedTechnique?.id === cell.id
+                      ? color
+                      : intensity > 0
+                        ? 'var(--wm-border)'
+                        : 'var(--wm-border-subtle)';
 
                     return (
                       <button
@@ -135,7 +142,8 @@ export default function MitreMatrixView() {
                         style={{
                           background: bgColor,
                           color: textColor,
-                          border: selectedTechnique?.id === cell.id ? `2px solid ${color}` : '1px solid #e2e8f0',
+                          border: `1px solid ${borderColor}`,
+                          borderLeft: `2px solid ${color}`,
                           borderRadius: 4,
                           padding: '6px 8px',
                           fontSize: 11,
@@ -151,10 +159,10 @@ export default function MitreMatrixView() {
                           (e.target as HTMLButtonElement).style.transform = 'scale(1)';
                         }}
                       >
-                        <div style={{ fontWeight: 600 }}>{cell.id}</div>
+                        <div style={{ fontWeight: 600, fontFamily: fonts.mono }}>{cell.id}</div>
                         <div style={{ fontSize: 10, opacity: 0.9 }}>{cell.name}</div>
                         {cell.eventCount > 0 && (
-                          <div style={{ fontSize: 10, marginTop: 2, fontWeight: 700 }}>
+                          <div style={{ fontSize: 10, marginTop: 2, fontWeight: 700, fontFamily: fonts.mono }}>
                             {cell.eventCount} event{cell.eventCount > 1 ? 's' : ''}
                           </div>
                         )}
@@ -174,39 +182,37 @@ export default function MitreMatrixView() {
           style={{
             width: 360,
             padding: 20,
-            background: '#fff',
-            borderLeft: '1px solid #e2e8f0',
+            background: 'var(--wm-panel)',
+            borderLeft: '1px solid var(--wm-border)',
             overflow: 'auto',
           }}
         >
-          <h3 style={{ margin: '0 0 8px', fontSize: 16, color: '#1e293b' }}>
+          <h3 style={{ margin: '0 0 8px', fontSize: 16, color: colors.text }}>
             {selectedTechnique.id}: {selectedTechnique.name}
           </h3>
-          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#64748b' }}>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: colors.dim }}>
             {selectedTechnique.eventCount} event{selectedTechnique.eventCount !== 1 ? 's' : ''} detected
           </p>
 
-          <h4 style={{ margin: '0 0 8px', fontSize: 13, color: '#334155' }}>Events</h4>
+          <h4 style={{ margin: '0 0 8px', fontSize: 13, color: colors.text2 }}>Events</h4>
           {techniqueEvents.length === 0 && (
-            <p style={{ fontSize: 12, color: '#94a3b8' }}>No events tagged with this technique.</p>
+            <p style={{ fontSize: 12, color: colors.muted }}>No events tagged with this technique.</p>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {techniqueEvents.map((ev) => (
               <div
                 key={ev.id}
+                className="wm-card"
                 style={{
                   padding: 10,
-                  background: '#f8fafc',
-                  borderRadius: 6,
-                  border: '1px solid #e2e8f0',
                   fontSize: 12,
                 }}
               >
-                <div style={{ fontWeight: 600, marginBottom: 4, color: '#1e293b' }}>
+                <div style={{ fontWeight: 600, marginBottom: 4, color: colors.text }}>
                   {ev.title || 'Untitled'}
                 </div>
-                <div style={{ color: '#64748b', lineHeight: 1.4 }}>{ev.content.slice(0, 200)}...</div>
-                <div style={{ color: '#94a3b8', marginTop: 4, fontSize: 11 }}>
+                <div style={{ color: colors.dim, lineHeight: 1.4 }}>{ev.content.slice(0, 200)}...</div>
+                <div style={{ color: colors.muted, marginTop: 4, fontSize: 11, fontFamily: fonts.mono }}>
                   {new Date(ev.eventAt).toLocaleString()}
                 </div>
               </div>
@@ -216,10 +222,4 @@ export default function MitreMatrixView() {
       )}
     </div>
   );
-}
-
-function hexToRgb(hex: string): string {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!result) return '99, 102, 241';
-  return `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`;
 }

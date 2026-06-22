@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { colors, kindColors, entityColors, healthColors } from '../lib/theme.js';
 
 interface Stats {
   sources: {
@@ -28,28 +29,6 @@ interface Stats {
   memory: { heapUsed: number; heapTotal: number; rss: number };
 }
 
-const KIND_COLORS: Record<string, string> = {
-  visual: '#22c55e',
-  text: '#64748b',
-  anomaly: '#ef4444',
-  trend: '#3b82f6',
-  alert: '#f59e0b',
-  social_post: '#8b5cf6',
-};
-
-const ENTITY_COLORS: Record<string, string> = {
-  ipv4: '#ef4444',
-  ipv6: '#ef4444',
-  domain: '#3b82f6',
-  email: '#8b5cf6',
-  hash_md5: '#10b981',
-  hash_sha1: '#10b981',
-  hash_sha256: '#10b981',
-  cve: '#f59e0b',
-  asn: '#06b6d4',
-  btc_address: '#f97316',
-};
-
 export default function DashboardStats() {
   const [stats, setStats] = useState<Stats | null>(null);
 
@@ -61,7 +40,7 @@ export default function DashboardStats() {
 
   if (!stats) {
     return (
-      <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+      <div style={{ padding: 40, textAlign: 'center', color: colors.dim }}>
         Loading dashboard...
       </div>
     );
@@ -71,23 +50,23 @@ export default function DashboardStats() {
   const maxKind = Math.max(1, ...Object.values(stats.events.kindBreakdown));
 
   return (
-    <div style={{ padding: '20px 24px', overflowY: 'auto', background: '#f8fafc', minHeight: '100%' }}>
+    <div style={{ padding: '20px 24px', overflowY: 'auto', minHeight: '100%' }}>
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
-        <h1 style={{ margin: 0, fontSize: 22, color: '#1e293b' }}>📊 Dashboard</h1>
-        <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
+        <h1 style={{ margin: 0, fontSize: 22, color: colors.text }}>📊 Dashboard</h1>
+        <p style={{ margin: '4px 0 0', fontSize: 13, color: colors.dim }}>
           Uptime: {formatUptime(stats.uptime)} · Memory: {formatBytes(stats.memory.heapUsed)} / {formatBytes(stats.memory.heapTotal)}
         </p>
       </div>
 
       {/* Hero cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 14, marginBottom: 28 }}>
-        <HeroCard label="Sources" value={stats.sources.total} sub={`${stats.sources.enabled} enabled`} color="#111" />
-        <HeroCard label="Events (1h)" value={stats.events.lastHour} sub={`${stats.events.lastDay} today`} color="#f59e0b" />
-        <HeroCard label="Events (7d)" value={stats.events.lastWeek} sub="last week" color="#8b5cf6" />
-        <HeroCard label="Entities" value={stats.entities.total} sub="extracted" color="#3b82f6" />
-        <HeroCard label="Healthy" value={stats.sources.health.healthy} sub={`${stats.sources.health.warning} warn · ${stats.sources.health.critical} crit`} color="#22c55e" />
-        <HeroCard label="Disabled" value={stats.sources.health.disabled} sub="sources" color="#94a3b8" />
+        <HeroCard label="Sources" value={stats.sources.total} sub={`${stats.sources.enabled} enabled`} color={colors.text} />
+        <HeroCard label="Events (1h)" value={stats.events.lastHour} sub={`${stats.events.lastDay} today`} color={colors.elevated} />
+        <HeroCard label="Events (7d)" value={stats.events.lastWeek} sub="last week" color={colors.purple} />
+        <HeroCard label="Entities" value={stats.entities.total} sub="extracted" color={colors.low} />
+        <HeroCard label="Healthy" value={stats.sources.health.healthy} sub={`${stats.sources.health.warning} warn · ${stats.sources.health.critical} crit`} color={colors.normal} />
+        <HeroCard label="Disabled" value={stats.sources.health.disabled} sub="sources" color={colors.muted} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20 }}>
@@ -102,14 +81,14 @@ export default function DashboardStats() {
                     style={{
                       width: '100%',
                       height: `${Math.max(pct, 4)}%`,
-                      background: count > 0 ? '#3b82f6' : '#e2e8f0',
+                      background: count > 0 ? colors.info : 'var(--wm-hover)',
                       borderRadius: '3px 3px 0 0',
                       minHeight: 4,
                       transition: 'height 0.3s',
                     }}
                     title={`${hour}: ${count} events`}
                   />
-                  <span style={{ fontSize: 9, color: '#94a3b8', transform: 'rotate(-45deg)', transformOrigin: 'top left', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 9, color: colors.muted, fontFamily: 'var(--wm-font-mono)', transform: 'rotate(-45deg)', transformOrigin: 'top left', whiteSpace: 'nowrap' }}>
                     {hour}
                   </span>
                 </div>
@@ -121,10 +100,10 @@ export default function DashboardStats() {
         {/* Source Health */}
         <Section title="🩺 Source Health">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 0' }}>
-            <HealthBar label="Healthy" count={stats.sources.health.healthy} total={stats.sources.total} color="#22c55e" />
-            <HealthBar label="Warning" count={stats.sources.health.warning} total={stats.sources.total} color="#f59e0b" />
-            <HealthBar label="Critical" count={stats.sources.health.critical} total={stats.sources.total} color="#ef4444" />
-            <HealthBar label="Disabled" count={stats.sources.health.disabled} total={stats.sources.total} color="#94a3b8" />
+            <HealthBar label="Healthy" count={stats.sources.health.healthy} total={stats.sources.total} color={healthColors.healthy} />
+            <HealthBar label="Warning" count={stats.sources.health.warning} total={stats.sources.total} color={healthColors.degraded} />
+            <HealthBar label="Critical" count={stats.sources.health.critical} total={stats.sources.total} color={healthColors.failing} />
+            <HealthBar label="Disabled" count={stats.sources.health.disabled} total={stats.sources.total} color={colors.muted} />
           </div>
         </Section>
 
@@ -135,22 +114,22 @@ export default function DashboardStats() {
               .sort((a, b) => b[1] - a[1])
               .map(([kind, count]) => (
                 <div key={kind} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ width: 70, fontSize: 12, fontWeight: 600, color: '#475569', textTransform: 'capitalize' }}>{kind}</span>
-                  <div style={{ flex: 1, height: 18, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
+                  <span style={{ width: 70, fontSize: 12, fontWeight: 600, color: colors.text2, textTransform: 'capitalize' }}>{kind}</span>
+                  <div style={{ flex: 1, height: 18, background: 'var(--wm-hover)', borderRadius: 4, overflow: 'hidden' }}>
                     <div
                       style={{
                         width: `${(count / maxKind) * 100}%`,
                         height: '100%',
-                        background: KIND_COLORS[kind] || '#64748b',
+                        background: kindColors[kind] || colors.muted,
                         borderRadius: 4,
                       }}
                     />
                   </div>
-                  <span style={{ width: 40, fontSize: 12, color: '#64748b', textAlign: 'right' }}>{count}</span>
+                  <span style={{ width: 40, fontSize: 12, color: colors.dim, textAlign: 'right', fontFamily: 'var(--wm-font-mono)', fontVariantNumeric: 'tabular-nums' }}>{count}</span>
                 </div>
               ))}
             {Object.keys(stats.events.kindBreakdown).length === 0 && (
-              <div style={{ fontSize: 13, color: '#94a3b8', padding: 12 }}>No events in the last 24 hours.</div>
+              <div style={{ fontSize: 13, color: colors.muted, padding: 12 }}>No events in the last 24 hours.</div>
             )}
           </div>
         </Section>
@@ -163,19 +142,17 @@ export default function DashboardStats() {
               .map(([kind, count]) => (
                 <div
                   key={kind}
+                  className="wm-card"
                   style={{
                     padding: '6px 12px',
-                    background: '#fff',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: 6,
                     fontSize: 12,
                     display: 'flex',
                     alignItems: 'center',
                     gap: 6,
                   }}
                 >
-                  <span style={{ fontWeight: 600, color: '#1e293b' }}>{count}</span>
-                  <span style={{ color: '#64748b', textTransform: 'capitalize' }}>{kind.replace(/_/g, ' ')}</span>
+                  <span style={{ fontWeight: 600, color: colors.text, fontFamily: 'var(--wm-font-mono)', fontVariantNumeric: 'tabular-nums' }}>{count}</span>
+                  <span style={{ color: colors.dim, textTransform: 'capitalize' }}>{kind.replace(/_/g, ' ')}</span>
                 </div>
               ))}
           </div>
@@ -187,37 +164,31 @@ export default function DashboardStats() {
             {stats.entities.top.map((e) => (
               <div
                 key={e.id}
+                className="wm-card"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 10,
                   padding: '6px 10px',
-                  background: '#fff',
-                  borderRadius: 6,
-                  border: '1px solid #e2e8f0',
                 }}
               >
                 <span
+                  className="wm-chip"
                   style={{
                     fontSize: 10,
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    padding: '2px 6px',
-                    borderRadius: 4,
-                    background: ENTITY_COLORS[e.type] || '#64748b',
-                    color: '#fff',
+                    background: entityColors[e.type] || entityColors.default,
                   }}
                 >
                   {e.type}
                 </span>
-                <span style={{ flex: 1, fontSize: 12, color: '#1e293b', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <span style={{ flex: 1, fontSize: 12, color: colors.text, fontFamily: 'var(--wm-font-mono)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {e.value}
                 </span>
-                <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>{e.count}</span>
+                <span style={{ fontSize: 11, color: colors.dim, fontWeight: 600, fontFamily: 'var(--wm-font-mono)', fontVariantNumeric: 'tabular-nums' }}>{e.count}</span>
               </div>
             ))}
             {stats.entities.top.length === 0 && (
-              <div style={{ fontSize: 13, color: '#94a3b8', padding: 12 }}>No entities extracted yet.</div>
+              <div style={{ fontSize: 13, color: colors.muted, padding: 12 }}>No entities extracted yet.</div>
             )}
           </div>
         </Section>
@@ -228,46 +199,44 @@ export default function DashboardStats() {
             {stats.mitre.topTechniques.map((t) => (
               <div
                 key={t.id}
+                className="wm-card"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 10,
                   padding: '6px 10px',
-                  background: '#fff',
-                  borderRadius: 6,
-                  border: '1px solid #e2e8f0',
                 }}
               >
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#4338ca', fontFamily: 'monospace' }}>{t.id}</span>
-                <span style={{ flex: 1, fontSize: 12, color: '#1e293b' }}>{t.name}</span>
-                <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>{t.count}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: colors.purple, fontFamily: 'var(--wm-font-mono)' }}>{t.id}</span>
+                <span style={{ flex: 1, fontSize: 12, color: colors.text }}>{t.name}</span>
+                <span style={{ fontSize: 11, color: colors.dim, fontWeight: 600, fontFamily: 'var(--wm-font-mono)', fontVariantNumeric: 'tabular-nums' }}>{t.count}</span>
               </div>
             ))}
             {stats.mitre.topTechniques.length === 0 && (
-              <div style={{ fontSize: 13, color: '#94a3b8', padding: 12 }}>No MITRE techniques detected yet.</div>
+              <div style={{ fontSize: 13, color: colors.muted, padding: 12 }}>No MITRE techniques detected yet.</div>
             )}
           </div>
         </Section>
 
         {/* Top Sources */}
         <Section title="🔥 Top Sources (24h)">
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <table className="wm-table">
             <thead>
-              <tr style={{ borderBottom: '2px solid #e2e8f0', textAlign: 'left' }}>
-                <th style={{ padding: '6px 8px', color: '#64748b', fontWeight: 600 }}>Source</th>
-                <th style={{ padding: '6px 8px', color: '#64748b', fontWeight: 600, textAlign: 'right' }}>Events</th>
+              <tr>
+                <th>Source</th>
+                <th style={{ textAlign: 'right' }}>Events</th>
               </tr>
             </thead>
             <tbody>
               {stats.events.topSources.map((s) => (
-                <tr key={s.sourceId} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#334155' }}>{s.sourceId.slice(0, 24)}...</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: '#1e293b' }}>{s.count}</td>
+                <tr key={s.sourceId}>
+                  <td style={{ fontFamily: 'var(--wm-font-mono)' }}>{s.sourceId.slice(0, 24)}...</td>
+                  <td style={{ textAlign: 'right', fontWeight: 600, color: colors.text }}>{s.count}</td>
                 </tr>
               ))}
               {stats.events.topSources.length === 0 && (
                 <tr>
-                  <td colSpan={2} style={{ padding: 16, color: '#94a3b8', textAlign: 'center' }}>
+                  <td colSpan={2} style={{ padding: 16, color: colors.muted, textAlign: 'center' }}>
                     No events in the last 24 hours.
                   </td>
                 </tr>
@@ -282,20 +251,20 @@ export default function DashboardStats() {
 
 function HeroCard({ label, value, sub, color }: { label: string; value: number; sub: string; color: string }) {
   return (
-    <div style={{ padding: 16, borderRadius: 10, background: '#fff', border: '1px solid #e2e8f0' }}>
-      <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600, marginBottom: 6 }}>
+    <div className="wm-card" style={{ padding: 16 }}>
+      <div style={{ fontSize: 11, color: colors.dim, textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600, marginBottom: 6 }}>
         {label}
       </div>
-      <div style={{ fontSize: 28, fontWeight: 800, color, lineHeight: 1 }}>{value}</div>
-      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{sub}</div>
+      <div style={{ fontSize: 28, fontWeight: 800, color, lineHeight: 1, fontFamily: 'var(--wm-font-mono)', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+      <div style={{ fontSize: 11, color: colors.muted, marginTop: 4 }}>{sub}</div>
     </div>
   );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', padding: 16 }}>
-      <h3 style={{ margin: '0 0 12px', fontSize: 13, color: '#334155', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+    <div className="wm-card" style={{ padding: 16 }}>
+      <h3 style={{ margin: '0 0 12px', fontSize: 13, color: colors.text2, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
         {title}
       </h3>
       {children}
@@ -308,12 +277,12 @@ function HealthBar({ label, count, total, color }: { label: string; count: numbe
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-        <span style={{ color: '#475569', fontWeight: 500 }}>{label}</span>
-        <span style={{ color: '#64748b' }}>
+        <span style={{ color: colors.text2, fontWeight: 500 }}>{label}</span>
+        <span style={{ color: colors.dim, fontFamily: 'var(--wm-font-mono)', fontVariantNumeric: 'tabular-nums' }}>
           {count} ({Math.round(pct)}%)
         </span>
       </div>
-      <div style={{ height: 8, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
+      <div style={{ height: 8, background: 'var(--wm-hover)', borderRadius: 4, overflow: 'hidden' }}>
         <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 4, transition: 'width 0.3s' }} />
       </div>
     </div>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, Suspense, lazy, useRef } from 'react';
+import { colors, kindColors, entityColors, rgb } from '../lib/theme.js';
 
 const ForceGraph2D = lazy(() => import('react-force-graph-2d'));
 
@@ -21,31 +22,25 @@ interface GraphData {
   links: GraphLink[];
 }
 
-const ENTITY_COLORS: Record<string, string> = {
-  ipv4: '#ef4444',
-  ipv6: '#ef4444',
-  domain: '#3b82f6',
-  email: '#8b5cf6',
-  hash_md5: '#10b981',
-  hash_sha1: '#10b981',
-  hash_sha256: '#10b981',
-  cve: '#f59e0b',
-  asn: '#06b6d4',
-  btc_address: '#f97316',
-};
-
-const EVENT_KIND_COLORS: Record<string, string> = {
-  visual: '#22c55e',
-  text: '#64748b',
-  anomaly: '#ef4444',
-  trend: '#3b82f6',
-  alert: '#f59e0b',
-  social_post: '#8b5cf6',
-};
+// Normalize the API's granular entityType keys (ipv4, hash_md5, btc_address, …)
+// down to the canonical buckets in theme.ts `entityColors`. Pure presentation —
+// no data/state is mutated.
+function entityColor(entityType: string | undefined): string {
+  const t = (entityType ?? '').toLowerCase();
+  if (t.startsWith('ip')) return entityColors.ip;
+  if (t.startsWith('hash')) return entityColors.hash;
+  if (t === 'domain') return entityColors.domain;
+  if (t === 'email') return entityColors.email;
+  if (t === 'cve') return entityColors.cve;
+  if (t === 'url') return entityColors.url;
+  if (t === 'org' || t === 'asn') return entityColors.org;
+  if (t === 'person') return entityColors.person;
+  return entityColors[t] ?? entityColors.default;
+}
 
 function GraphFallback() {
   return (
-    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.dim }}>
       Loading graph engine...
     </div>
   );
@@ -53,10 +48,10 @@ function GraphFallback() {
 
 function GraphError({ message }: { message: string }) {
   return (
-    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#ef4444', gap: 8, padding: 20 }}>
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: colors.critical, gap: 8, padding: 20 }}>
       <div style={{ fontSize: 32 }}>⚠️</div>
       <div style={{ fontSize: 14, fontWeight: 600 }}>Graph failed to load</div>
-      <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>{message}</div>
+      <div style={{ fontSize: 12, color: colors.dim, textAlign: 'center' }}>{message}</div>
     </div>
   );
 }
@@ -108,9 +103,9 @@ export default function GraphView() {
   const isEmpty = !loading && filteredNodes.length === 0 && !error;
 
   return (
-    <div style={{ display: 'flex', height: '100%', background: '#0f172a' }}>
+    <div style={{ display: 'flex', height: '100%', background: colors.base }}>
       {/* Sidebar */}
-      <div style={{ width: 280, padding: 16, background: '#1e293b', color: '#e2e8f0', overflow: 'auto', borderRight: '1px solid #334155', flexShrink: 0 }}>
+      <div style={{ width: 280, padding: 16, background: colors.panel, color: colors.text, overflow: 'auto', borderRight: `1px solid ${colors.border}`, flexShrink: 0 }}>
         <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>🔗 Intelligence Graph</h2>
 
         <div style={{ marginBottom: 12 }}>
@@ -119,7 +114,7 @@ export default function GraphView() {
             placeholder="Search nodes..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ width: '100%', padding: '6px 10px', borderRadius: 4, border: '1px solid #475569', background: '#0f172a', color: '#fff', fontSize: 13 }}
+            style={{ width: '100%', padding: '6px 10px', borderRadius: 4, border: `1px solid ${colors.border}`, background: colors.base, color: colors.text, fontSize: 13 }}
           />
         </div>
 
@@ -127,7 +122,7 @@ export default function GraphView() {
           <select
             value={entityTypeFilter}
             onChange={(e) => setEntityTypeFilter(e.target.value)}
-            style={{ width: '100%', padding: '6px 10px', borderRadius: 4, border: '1px solid #475569', background: '#0f172a', color: '#fff', fontSize: 13 }}
+            style={{ width: '100%', padding: '6px 10px', borderRadius: 4, border: `1px solid ${colors.border}`, background: colors.base, color: colors.text, fontSize: 13 }}
           >
             <option value="all">All entity types</option>
             {entityTypes.map((t) => (
@@ -136,20 +131,20 @@ export default function GraphView() {
           </select>
         </div>
 
-        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: colors.dim, marginBottom: 12 }}>
           Nodes: {filteredNodes.length} | Links: {filteredLinks.length}
         </div>
 
         <button
           onClick={loadNetwork}
           disabled={loading}
-          style={{ width: '100%', padding: '8px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', marginBottom: 16, opacity: loading ? 0.6 : 1 }}
+          style={{ width: '100%', padding: '8px', background: colors.info, color: colors.accent, border: 'none', borderRadius: 4, cursor: 'pointer', marginBottom: 16, opacity: loading ? 0.6 : 1 }}
         >
           {loading ? 'Loading...' : '🔄 Refresh'}
         </button>
 
         {selectedNode && (
-          <div style={{ background: '#0f172a', padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 16 }}>
+          <div style={{ background: colors.base, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 16, border: `1px solid ${colors.border}` }}>
             <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>
               {selectedNode.type === 'event' ? '📄 Event' : '🔖 Entity'}
             </h3>
@@ -158,27 +153,27 @@ export default function GraphView() {
             {selectedNode.kind && (
               <p style={{ margin: '4px 0' }}>
                 <strong>Kind:</strong>{' '}
-                <span style={{ color: EVENT_KIND_COLORS[selectedNode.kind] || '#fff' }}>{selectedNode.kind}</span>
+                <span style={{ color: kindColors[selectedNode.kind] || colors.accent }}>{selectedNode.kind}</span>
               </p>
             )}
             {selectedNode.entityType && (
               <p style={{ margin: '4px 0' }}>
                 <strong>Type:</strong>{' '}
-                <span style={{ color: ENTITY_COLORS[selectedNode.entityType] || '#fff' }}>{selectedNode.entityType}</span>
+                <span style={{ color: entityColor(selectedNode.entityType) }}>{selectedNode.entityType}</span>
               </p>
             )}
           </div>
         )}
 
         <div>
-          <h4 style={{ margin: '0 0 8px', fontSize: 12, color: '#94a3b8' }}>Legend</h4>
-          {Object.entries(EVENT_KIND_COLORS).map(([kind, color]) => (
+          <h4 style={{ margin: '0 0 8px', fontSize: 12, color: colors.dim }}>Legend</h4>
+          {Object.entries(kindColors).map(([kind, color]) => (
             <div key={kind} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
               <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block' }} />
               {kind}
             </div>
           ))}
-          {Object.entries(ENTITY_COLORS).map(([type, color]) => (
+          {Object.entries(entityColors).map(([type, color]) => (
             <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
               <span style={{ width: 10, height: 10, borderRadius: 2, background: color, display: 'inline-block' }} />
               {type}
@@ -190,8 +185,8 @@ export default function GraphView() {
       {/* Graph canvas */}
       <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
         {loading && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', gap: 12, zIndex: 10 }}>
-            <div style={{ width: 32, height: 32, border: '3px solid #334155', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: colors.dim, gap: 12, zIndex: 10 }}>
+            <div style={{ width: 32, height: 32, border: `3px solid ${colors.border}`, borderTopColor: colors.info, borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
             <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
             <div>Loading graph...</div>
           </div>
@@ -200,17 +195,17 @@ export default function GraphView() {
         {error && <GraphError message={error} />}
 
         {isEmpty && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', gap: 16, padding: 40 }}>
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: colors.dim, gap: 16, padding: 40 }}>
             <div style={{ fontSize: 56 }}>🔗</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>Graph is empty</div>
-            <div style={{ fontSize: 14, maxWidth: 400, textAlign: 'center', lineHeight: 1.6, color: '#94a3b8' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: colors.text }}>Graph is empty</div>
+            <div style={{ fontSize: 14, maxWidth: 400, textAlign: 'center', lineHeight: 1.6, color: colors.dim }}>
               Entities (IPs, domains, emails, hashes, CVEs) are extracted automatically from event content as new events are ingested.
               <br /><br />
               Once events flow through the pipeline, they will appear here connected to their extracted entities.
             </div>
             <button
               onClick={loadNetwork}
-              style={{ padding: '8px 20px', borderRadius: 6, border: '1px solid #475569', background: '#1e293b', color: '#e2e8f0', cursor: 'pointer', fontSize: 13, marginTop: 8 }}
+              style={{ padding: '8px 20px', borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.panel, color: colors.text, cursor: 'pointer', fontSize: 13, marginTop: 8 }}
             >
               🔄 Check again
             </button>
@@ -226,13 +221,13 @@ export default function GraphView() {
                 nodeAutoColorBy="type"
                 nodeLabel="label"
                 nodeColor={(n: any) => {
-                  if (n.type === 'entity') return ENTITY_COLORS[n.entityType || ''] || '#94a3b8';
-                  return EVENT_KIND_COLORS[n.kind || ''] || '#64748b';
+                  if (n.type === 'entity') return entityColor(n.entityType);
+                  return kindColors[n.kind || ''] || colors.dim;
                 }}
                 nodeVal={(n: any) => (n.type === 'event' ? 6 : 4)}
-                linkColor={() => 'rgba(148, 163, 184, 0.3)'}
+                linkColor={() => `rgba(${rgb(colors.text)}, 0.2)`}
                 linkWidth={(l: any) => (l.confidence ?? 0.5) * 2}
-                backgroundColor="#0f172a"
+                backgroundColor={colors.base}
                 onNodeClick={(n: any) => setSelectedNode(n as GraphNode)}
                 warmupTicks={10}
                 cooldownTicks={50}

@@ -1,17 +1,9 @@
 import { useEffect, useState } from 'react';
 import { listChannels, createChannel, setChannelEnabled, deleteChannel } from '../lib/api.js';
 import type { Channel, ChannelKind } from '../lib/types.js';
+import { colors, channelColors, rgb } from '../lib/theme.js';
 
 const USER_ID = 'operator';
-
-const kindColors: Record<ChannelKind, string> = {
-  telegram: '#229ed9',
-  discord: '#5865f2',
-  slack: '#4a154b',
-  webhook: '#6b7280',
-  email: '#22c55e',
-  samaritan: '#111827',
-};
 
 const kindIcons: Record<ChannelKind, string> = {
   telegram: '✈️',
@@ -153,15 +145,15 @@ export default function ChannelsPanel() {
   return (
     <div style={{ padding: 20, maxWidth: 760, margin: '0 auto', height: '100%', overflowY: 'auto' }}>
       {/* Add channel form */}
-      <div style={{ padding: 16, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', marginBottom: 20 }}>
+      <div className="wm-card" style={{ padding: 16, marginBottom: 20 }}>
         <div style={{ fontWeight: 600, marginBottom: 12 }}>Add delivery channel</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12, color: '#6b7280' }}>Kind</span>
+            <span style={{ fontSize: 12, color: 'var(--wm-dim)' }}>Kind</span>
             <select
+              className="wm-select"
               value={kind}
               onChange={(e) => onKindChange(e.target.value as ChannelKind)}
-              style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #ccc', fontSize: 14 }}
             >
               {ADDABLE_KINDS.map((k) => (
                 <option key={k} value={k}>
@@ -173,35 +165,26 @@ export default function ChannelsPanel() {
 
           {fields.map((f) => (
             <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ fontSize: 12, color: '#6b7280' }}>{f.label}</span>
+              <span style={{ fontSize: 12, color: 'var(--wm-dim)' }}>{f.label}</span>
               <input
+                className="wm-input"
                 type={f.secret ? 'password' : 'text'}
                 value={form[f.key] ?? ''}
                 placeholder={f.placeholder}
                 onChange={(e) => setForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #ccc', fontSize: 14 }}
               />
             </label>
           ))}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <button
+              className="wm-btn wm-btn--primary"
               onClick={onAdd}
               disabled={!canSubmit || submitting}
-              style={{
-                padding: '8px 16px',
-                borderRadius: 6,
-                border: 'none',
-                background: !canSubmit || submitting ? '#9ca3af' : '#2563eb',
-                color: '#fff',
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: !canSubmit || submitting ? 'not-allowed' : 'pointer',
-              }}
             >
               {submitting ? 'Adding…' : 'Add channel'}
             </button>
-            <span style={{ fontSize: 12, color: '#9ca3af' }}>Secrets are stored by the feeder and never shown again.</span>
+            <span style={{ fontSize: 12, color: 'var(--wm-muted)' }}>Secrets are stored by the feeder and never shown again.</span>
           </div>
         </div>
       </div>
@@ -210,10 +193,10 @@ export default function ChannelsPanel() {
         <div
           style={{
             padding: '10px 14px',
-            borderRadius: 6,
-            border: '1px solid #fecaca',
-            background: '#fef2f2',
-            color: '#b91c1c',
+            borderRadius: 3,
+            border: `1px solid rgba(${rgb(colors.critical)}, 0.4)`,
+            background: `rgba(${rgb(colors.critical)}, 0.12)`,
+            color: colors.critical,
             fontSize: 13,
             marginBottom: 16,
           }}
@@ -222,14 +205,14 @@ export default function ChannelsPanel() {
         </div>
       )}
 
-      <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+      <div style={{ fontSize: 13, color: 'var(--wm-dim)', marginBottom: 12 }}>
         {loading ? 'Loading…' : `${channels.length} channel${channels.length === 1 ? '' : 's'}`}
       </div>
 
       {/* Channel list */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {!loading && channels.length === 0 && (
-          <div style={{ fontSize: 14, color: '#9ca3af', textAlign: 'center', padding: 24 }}>
+          <div style={{ fontSize: 14, color: 'var(--wm-muted)', textAlign: 'center', padding: 24 }}>
             No channels yet. Add one above to receive briefs and alerts.
           </div>
         )}
@@ -238,82 +221,55 @@ export default function ChannelsPanel() {
           return (
             <div
               key={ch.id}
+              className="wm-card"
               style={{
                 padding: 16,
-                borderRadius: 8,
-                border: '1px solid #e5e7eb',
-                background: '#fff',
                 opacity: ch.enabled ? 1 : 0.7,
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                 <span
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    background: kindColors[ch.kind] ?? '#999',
-                    color: '#fff',
-                  }}
+                  className="wm-chip"
+                  style={{ background: channelColors[ch.kind] ?? colors.dim }}
                 >
                   {kindIcons[ch.kind] ?? '📡'} {ch.kind}
                 </span>
                 <span
+                  className="wm-chip"
                   style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    background: ch.enabled ? '#dcfce7' : '#f3f4f6',
-                    color: ch.enabled ? '#15803d' : '#6b7280',
+                    background: ch.enabled ? `rgba(${rgb(colors.live)}, 0.15)` : `rgba(${rgb(colors.muted)}, 0.15)`,
+                    color: ch.enabled ? colors.live : colors.dim,
                   }}
                 >
                   {ch.enabled ? 'Enabled' : 'Disabled'}
                 </span>
                 {ch.quietHours && (
-                  <span style={{ fontSize: 12, color: '#6b7280' }}>
+                  <span style={{ fontSize: 12, color: 'var(--wm-dim)' }}>
                     🌙 quiet {ch.quietHours.startHour}:00–{ch.quietHours.endHour}:00
                     {ch.quietHours.tz ? ` ${ch.quietHours.tz}` : ''}
                   </span>
                 )}
-                <span style={{ fontSize: 12, color: '#666', marginLeft: 'auto' }}>
+                <span style={{ fontSize: 12, color: 'var(--wm-dim)', marginLeft: 'auto' }}>
                   {new Date(ch.createdAt).toLocaleDateString()}
                 </span>
               </div>
 
-              <div style={{ fontSize: 13, color: '#374151', fontFamily: 'ui-monospace, monospace', wordBreak: 'break-all', marginBottom: 12 }}>
+              <div className="wm-meta" style={{ fontSize: 13, color: 'var(--wm-text-2)', wordBreak: 'break-all', marginBottom: 12 }}>
                 {configSummary(ch.kind, ch.config)}
               </div>
 
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
+                  className="wm-btn"
                   onClick={() => onToggle(ch)}
                   disabled={busy}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 6,
-                    border: '1px solid #ccc',
-                    background: '#f3f4f6',
-                    cursor: busy ? 'not-allowed' : 'pointer',
-                    fontSize: 13,
-                  }}
                 >
                   {ch.enabled ? 'Disable' : 'Enable'}
                 </button>
                 <button
+                  className="wm-btn wm-btn--danger"
                   onClick={() => onDelete(ch)}
                   disabled={busy}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 6,
-                    border: '1px solid #fecaca',
-                    background: '#fef2f2',
-                    color: '#b91c1c',
-                    cursor: busy ? 'not-allowed' : 'pointer',
-                    fontSize: 13,
-                  }}
                 >
                   Delete
                 </button>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getSignals } from '../lib/api.js';
 import type { IntelSignal, SignalKind } from '../lib/types.js';
+import { signalColors, scoreColor } from '../lib/theme.js';
 
 // Cross-stream intelligence signals emitted by the MIT "brain" layer. Each kind
 // gets a distinct accent color so an operator can scan groups at a glance.
@@ -12,15 +13,6 @@ const KIND_ORDER: SignalKind[] = [
   'volume_anomaly',
   'cluster_surge',
 ];
-
-const kindColors: Record<SignalKind, string> = {
-  convergence: '#6366f1',
-  geo_convergence: '#0ea5e9',
-  velocity_spike: '#f59e0b',
-  silent_source: '#64748b',
-  volume_anomaly: '#ec4899',
-  cluster_surge: '#ef4444',
-};
 
 const kindIcons: Record<SignalKind, string> = {
   convergence: '🔀',
@@ -103,11 +95,12 @@ export default function SignalsPanel() {
       <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
         <select
           multiple
+          className="wm-select"
           value={kinds}
           onChange={(e) =>
             setKinds(Array.from(e.target.selectedOptions).map((o) => o.value as SignalKind))
           }
-          style={{ padding: 8, borderRadius: 6, border: '1px solid #ccc', minWidth: 180, fontSize: 14 }}
+          style={{ minWidth: 180 }}
         >
           {KIND_ORDER.map((k) => (
             <option key={k} value={k}>
@@ -115,7 +108,7 @@ export default function SignalsPanel() {
             </option>
           ))}
         </select>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#374151' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--wm-text)' }}>
           <span style={{ whiteSpace: 'nowrap' }}>Min score</span>
           <input
             type="range"
@@ -132,18 +125,12 @@ export default function SignalsPanel() {
         </label>
         {(kinds.length > 0 || minScore > 0) && (
           <button
+            className="wm-btn"
             onClick={() => {
               setKinds([]);
               setMinScore(0);
             }}
-            style={{
-              padding: '8px 14px',
-              borderRadius: 6,
-              border: '1px solid #ccc',
-              background: '#f3f4f6',
-              cursor: 'pointer',
-              fontSize: 13,
-            }}
+            style={{ cursor: 'pointer' }}
           >
             Clear
           </button>
@@ -151,7 +138,7 @@ export default function SignalsPanel() {
       </div>
 
       {/* Results count */}
-      <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+      <div style={{ fontSize: 13, color: 'var(--wm-dim)', marginBottom: 12 }}>
         {loading
           ? 'Loading...'
           : `${totalShown.toLocaleString()} signal${totalShown === 1 ? '' : 's'} across ${groups.length} group${groups.length === 1 ? '' : 's'}`}
@@ -159,14 +146,14 @@ export default function SignalsPanel() {
 
       {/* Grouped signals */}
       {!loading && groups.length === 0 && (
-        <div style={{ fontSize: 14, color: '#9ca3af', padding: '40px 0', textAlign: 'center' }}>
+        <div style={{ fontSize: 14, color: 'var(--wm-muted)', padding: '40px 0', textAlign: 'center' }}>
           No signals match the current filters.
         </div>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         {groups.map((group) => {
-          const accent = kindColors[group.kind];
+          const accent = signalColors[group.kind];
           return (
             <div key={group.kind}>
               {/* Group header */}
@@ -181,18 +168,20 @@ export default function SignalsPanel() {
                 }}
               >
                 <span style={{ fontSize: 16 }}>{kindIcons[group.kind]}</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: accent }}>
+                <span
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 700,
+                    color: 'var(--wm-dim)',
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.5,
+                  }}
+                >
                   {kindLabels[group.kind]}
                 </span>
                 <span
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: '#fff',
-                    background: accent,
-                    borderRadius: 10,
-                    padding: '1px 8px',
-                  }}
+                  className="wm-chip"
+                  style={{ color: accent, borderColor: accent }}
                 >
                   {group.items.length}
                 </span>
@@ -203,24 +192,19 @@ export default function SignalsPanel() {
                 {group.items.map((sig) => (
                   <div
                     key={sig.id}
+                    className="wm-card"
                     style={{
                       padding: 16,
-                      borderRadius: 8,
-                      border: '1px solid #e5e7eb',
-                      borderLeft: `4px solid ${accent}`,
-                      background: '#fff',
+                      borderLeft: `3px solid ${accent}`,
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{sig.title}</span>
                       <span
+                        className="wm-chip"
                         style={{
-                          fontSize: 12,
-                          fontWeight: 700,
-                          color: '#fff',
-                          background: accent,
-                          borderRadius: 12,
-                          padding: '2px 10px',
+                          color: scoreColor(sig.score / 100),
+                          borderColor: scoreColor(sig.score / 100),
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
@@ -229,7 +213,7 @@ export default function SignalsPanel() {
                     </div>
 
                     {sig.summary && (
-                      <div style={{ fontSize: 14, color: '#374151', lineHeight: 1.5, marginBottom: 8 }}>
+                      <div style={{ fontSize: 14, color: 'var(--wm-text-2)', lineHeight: 1.5, marginBottom: 8 }}>
                         {sig.summary}
                       </div>
                     )}
@@ -238,16 +222,7 @@ export default function SignalsPanel() {
                     {sig.sourceIds && sig.sourceIds.length > 0 && (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
                         {sig.sourceIds.map((sid) => (
-                          <span
-                            key={sid}
-                            style={{
-                              fontSize: 11,
-                              padding: '2px 8px',
-                              background: '#f3f4f6',
-                              borderRadius: 4,
-                              color: '#4b5563',
-                            }}
-                          >
+                          <span key={sid} className="wm-chip wm-meta">
                             📡 {sid}
                           </span>
                         ))}
@@ -255,7 +230,7 @@ export default function SignalsPanel() {
                     )}
 
                     {/* Meta row */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 12, color: '#6b7280' }}>
+                    <div className="wm-meta" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 12, color: 'var(--wm-dim)' }}>
                       <span>
                         {(sig.eventIds?.length ?? 0).toLocaleString()} event
                         {(sig.eventIds?.length ?? 0) === 1 ? '' : 's'}
