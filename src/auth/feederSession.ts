@@ -68,15 +68,24 @@ export async function issueFeederSession(c: Context, s: { uid: string; email?: s
   });
 }
 
-/** Read + verify this origin's session cookie. */
+/** Read + verify a valid 'session' JWT cookie. Accepts either:
+ *   - `samaritan_feeder_session` — this origin's own cookie, set by the handshake callback
+ *     (used when the feeder is on a different site than Samaritan, e.g. the .fly.dev host);
+ *   - `samaritan_session` — Samaritan's OWN cookie, sent to us directly when both share a
+ *     parent domain (Samaritan sets it with domain=.summonsimon.com). This is the
+ *     zero-redirect path: no /auth/sso bounce, the browser just carries the cookie.
+ * Both are HS256 'session' JWTs under the shared secret, so verification is identical. */
 export async function readFeederSession(c: Context): Promise<FeederSession | null> {
-  const token = getCookie(c, COOKIE);
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, secret(), { audience: 'session' });
-    const uid = String(payload.uid ?? '');
-    return uid ? { uid, email: payload.email ? String(payload.email) : undefined } : null;
-  } catch {
-    return null;
+  for (const name of [COOKIE, 'samaritan_session']) {
+    const token = getCookie(c, name);
+    if (!token) continue;
+    try {
+      const { payload } = await jwtVerify(token, secret(), { audience: 'session' });
+      const uid = String(payload.uid ?? '');
+      if (uid) return { uid, email: payload.email ? String(payload.email) : undefined };
+    } catch {
+      // try the next cookie
+    }
   }
+  return null;
 }
