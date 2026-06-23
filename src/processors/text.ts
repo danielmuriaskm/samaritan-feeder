@@ -54,7 +54,7 @@ export async function processTextEvent(raw: RawEvent): Promise<ProcessorResult> 
   };
 }
 
-async function callDirectLLM(
+export async function callDirectLLM(
   system: string,
   user: string,
 ): Promise<{ choices?: Array<{ message?: { content?: string } }> } | null> {
