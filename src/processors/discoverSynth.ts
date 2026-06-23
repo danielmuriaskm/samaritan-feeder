@@ -1,4 +1,4 @@
-import type { IntelligenceEvent } from '../types.js';
+import type { EventKind, IntelligenceEvent } from '../types.js';
 import { config } from '../config.js';
 import { callSamaritanLLM } from '../samaritan-client.js';
 import { sanitizeForPrompt, wrapUntrusted } from '../llm/sanitize.js';
@@ -26,6 +26,15 @@ import { createHash } from 'crypto';
 // ---------------------------------------------------------------------------
 // Tunables (editorial + cost budget).
 // ---------------------------------------------------------------------------
+
+/**
+ * Discover is the NEWS feed (Perplexity-style). It is built only from news-ish
+ * event kinds — articles, posts, trends, visuals — and deliberately EXCLUDES
+ * `alert`/`anomaly`/`detection`, which belong to the separate Events feed
+ * (/discover/events). This keeps the synthesized tiles "mostly news" instead of a
+ * wall of NWS weather alerts (which dominate raw event volume).
+ */
+const NEWS_KINDS: EventKind[] = ['text', 'social_post', 'trend', 'visual'];
 
 /** Look-back window for events that can feed the feed. */
 const WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -134,6 +143,7 @@ function modelLabel(): string {
 async function synthesizeFeed(now: number): Promise<DiscoverFeed> {
   const events = await listTopEvents({
     since: now - WINDOW_MS,
+    kinds: NEWS_KINDS,
     minScore: MIN_SCORE,
     limit: FETCH_LIMIT,
   });

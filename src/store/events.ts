@@ -43,6 +43,53 @@ export async function listEvents(opts: {
   return rows.map(fromRow);
 }
 
+/**
+ * Like listEvents, but collapses items that share a title to the most recent one
+ * (DISTINCT ON lower(trim(title)), latest event_at). Null/empty titles are never
+ * collapsed (keyed by id). This is the read path for the Events feed: over-producing
+ * sources (e.g. the NWS seeds re-emitting the same warning every poll, ~1.5k/day)
+ * would otherwise flood it with near-identical rows. Supports the feed UI's filters:
+ * free-text q (ILIKE title/content), sourceId, kinds, since.
+ */
+export async function listEventsDeduped(opts: {
+  query?: string;
+  sourceId?: string;
+  kinds?: EventKind[];
+  since?: number;
+  limit?: number;
+}): Promise<IntelligenceEvent[]> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  let idx = 1;
+
+  if (opts.query) {
+    conditions.push(`(content ILIKE $${idx} OR title ILIKE $${idx})`);
+    params.push(`%${opts.query}%`);
+    idx++;
+  }
+  if (opts.sourceId) { conditions.push(`source_id = $${idx++}`); params.push(opts.sourceId); }
+  if (opts.kinds?.length) { conditions.push(`kind = ANY($${idx++}::text[])`); params.push(opts.kinds); }
+  if (opts.since) { conditions.push(`event_at >= $${idx++}`); params.push(opts.since); }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = typeof opts.limit === 'number' ? Math.min(Math.max(1, opts.limit), 500) : 150;
+
+  // DISTINCT ON the title key keeps the newest row per title; survivors are then
+  // ordered by recency and capped. The dedupe key falls back to the id for rows
+  // with no usable title so genuinely distinct untitled events are preserved.
+  const rows = await query<Record<string, unknown>>(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (COALESCE(NULLIF(lower(btrim(title)), ''), id::text)) *
+         FROM intelligence_events ${where}
+        ORDER BY COALESCE(NULLIF(lower(btrim(title)), ''), id::text), event_at DESC
+     ) d
+     ORDER BY event_at DESC
+     LIMIT $${idx++}`,
+    [...params, limit],
+  );
+  return rows.map(fromRow);
+}
+
 export async function searchEvents(opts: {
   query?: string;
   sourceId?: string;
