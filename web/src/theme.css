@@ -27,8 +27,9 @@
   --wm-low: #3388ff;
   --wm-info: #3b82f6;
   --wm-live: #44ff88;
-  /* map */
-  --wm-map-bg: #020a08;
+  /* map — OSM ocean blue so unloaded edges/poles blend with the OpenStreetMap
+     basemap (was near-black, tuned for the old dark CARTO tiles). */
+  --wm-map-bg: #aad3df;
   /* fonts */
   --wm-font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --wm-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
