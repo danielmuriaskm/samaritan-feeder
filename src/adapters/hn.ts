@@ -13,17 +13,34 @@ export class HnAdapter extends BaseAdapter {
     if (config.maxItems !== undefined && typeof config.maxItems !== 'number') {
       errors.push('config.maxItems must be a number');
     }
+    if (config.limit !== undefined && typeof config.limit !== 'number') {
+      errors.push('config.limit must be a number');
+    }
+    if (config.which !== undefined && !['top', 'front_page', 'new', 'date'].includes(String(config.which))) {
+      errors.push('config.which must be one of: top, front_page, new, date');
+    }
     return { valid: errors.length === 0, errors };
   }
 
   async poll(config: Record<string, unknown>, cursor?: string): Promise<RawEvent[]> {
     const query = String(config.query ?? '');
-    const maxItems = typeof config.maxItems === 'number' ? config.maxItems : 30;
+    const maxItems =
+      typeof config.maxItems === 'number' ? config.maxItems
+      : typeof config.limit === 'number' ? config.limit
+      : 30;
     const sourceId = String(config.sourceId ?? 'hn_algolia');
+    const which = String(config.which ?? '').toLowerCase();
+    // "top" / "front_page": pull the current front page (high-signal, points-sorted)
+    // and let the stable dedupe (below) drop already-seen stories — only NEW
+    // front-page entrants persist. This is what the source intends, vs. the old
+    // behavior of ingesting the newest-by-date firehose.
+    const frontPage = !query && (which === 'top' || which === 'front_page');
     const since = cursor ? Number(cursor) : 0;
 
-    // Algolia search API — no auth needed
-    const url = query
+    // Algolia search API — no auth needed.
+    const url = frontPage
+      ? `https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=${maxItems}`
+      : query
       ? `https://hn.algolia.com/api/v1/search_by_date?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=${maxItems}`
       : `https://hn.algolia.com/api/v1/search_by_date?tags=story&hitsPerPage=${maxItems}`;
 
@@ -42,7 +59,10 @@ export class HnAdapter extends BaseAdapter {
     const events: RawEvent[] = [];
     for (const hit of hits) {
       const createdAt = (hit.created_at_i ?? 0) * 1000;
-      if (createdAt <= since) continue;
+      // In date/newest mode the cursor prevents re-pulling the whole list each poll.
+      // In front-page mode older stories are expected (a story can sit on the front
+      // page for hours), so we rely on the stable dedupe key instead of the cursor.
+      if (!frontPage && createdAt <= since) continue;
 
       events.push(
         this.makeEvent(
@@ -53,6 +73,12 @@ export class HnAdapter extends BaseAdapter {
             rawData: hit as unknown as Record<string, unknown>,
             eventAt: createdAt,
             confidence: this.scoreToConfidence(hit.points, hit.num_comments),
+            // Stable per-story dedupe key (the HN item id is globally unique and
+            // immutable). Collapses re-ingests across polls and across overlapping
+            // HN feeds — the same fix pattern as the NWS/USGS adapters. Without it
+            // the adapter fell back to content hashing, which drifted as a story's
+            // text/url changed and let the same story persist multiple times.
+            dedupeContent: `hn:${hit.objectID}`,
             tags: {
               author: hit.author,
               object_id: hit.objectID,
