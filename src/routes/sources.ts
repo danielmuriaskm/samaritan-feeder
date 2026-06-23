@@ -71,6 +71,9 @@ const createSchema = z.object({
     'webcrawl', 'twitter_scrape', 'reddit_scrape', 'sherlock',
     'urlscan', 'pastebin', 'gist',
     'darksearch', 'greynoise', 'stix', 'nvd',
+    // 006: phishing IOC + defacement firehoses (the DB kind CHECK is dropped in
+    // prod; getAdapter() below is the real gate).
+    'openphish', 'zoneh',
   ]),
   name: z.string().min(1).max(200),
   description: z.string().max(1000).optional(),
