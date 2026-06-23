@@ -145,12 +145,23 @@ function modelLabel(): string {
  * `MAX_TILES` LLM calls.
  */
 async function synthesizeFeed(now: number): Promise<DiscoverFeed> {
-  const events = await listTopEvents({
-    since: now - WINDOW_MS,
+  const since = now - WINDOW_MS;
+  let events = await listTopEvents({
+    since,
     sourceKinds: NEWS_SOURCE_KINDS,
     minScore: MIN_SCORE,
     limit: FETCH_LIMIT,
   });
+
+  // The composite importance score is tuned for alert prioritization and
+  // systematically under-scores NEWS sources (HN/RSS/social top out around 0.4),
+  // so the MIN_SCORE gate can starve the news feed at a quiet hour and leave
+  // Discover near-empty. When too few events clear the gate, fall back to the best
+  // available recent news regardless of score — the feed is never empty while
+  // there is news in the window. (No-op when the gate already yields enough.)
+  if (events.length < MIN_TILES) {
+    events = await listTopEvents({ since, sourceKinds: NEWS_SOURCE_KINDS, limit: FETCH_LIMIT });
+  }
 
   if (events.length === 0) {
     return { tiles: [], eventsConsidered: 0, lastRefresh: now, model: modelLabel() };
