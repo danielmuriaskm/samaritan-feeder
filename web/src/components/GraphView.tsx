@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, Suspense, lazy, useRef } from 'react';
 import { colors, kindColors, entityColors, rgb } from '../lib/theme.js';
+import { getGraphNetwork, getLineage, graphExportUrl, type GraphOpts, type LineageNeighbor } from '../lib/api.js';
 
 const ForceGraph2D = lazy(() => import('react-force-graph-2d'));
 
@@ -20,6 +21,11 @@ interface GraphLink {
 interface GraphData {
   nodes: GraphNode[];
   links: GraphLink[];
+}
+
+interface Lineage {
+  parents: LineageNeighbor[];
+  children: LineageNeighbor[];
 }
 
 // Normalize the API's granular entityType keys (ipv4, hash_md5, btc_address, …)
@@ -56,6 +62,22 @@ function GraphError({ message }: { message: string }) {
   );
 }
 
+// Shared button-style for the export anchors + toggle pills, matching the dark wm-* look.
+const exportLinkStyle = (disabled: boolean): React.CSSProperties => ({
+  display: 'block',
+  textAlign: 'center',
+  padding: '6px 10px',
+  borderRadius: 4,
+  border: `1px solid ${colors.border}`,
+  background: colors.base,
+  color: disabled ? colors.muted : colors.text,
+  fontSize: 12,
+  textDecoration: 'none',
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  opacity: disabled ? 0.5 : 1,
+  pointerEvents: disabled ? 'none' : 'auto',
+});
+
 export default function GraphView() {
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
   const [loading, setLoading] = useState(true);
@@ -63,19 +85,30 @@ export default function GraphView() {
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>('all');
+  // 006 graph toggles.
+  const [entityOnly, setEntityOnly] = useState(false);
+  const [includeLineage, setIncludeLineage] = useState(false);
+  // 006 lineage drill-down for the selected EVENT node.
+  const [lineage, setLineage] = useState<Lineage | null>(null);
+  const [lineageLoading, setLineageLoading] = useState(false);
   const fgRef = useRef<any>(null);
 
-  useEffect(() => {
-    loadNetwork();
-  }, []);
+  // Current export/fetch options derived from the toggles.
+  const graphOpts: GraphOpts = {
+    limit: 100,
+    tier: entityOnly ? 'entity' : undefined,
+    includeLineage,
+  };
 
   const loadNetwork = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/graph/network?limit=100');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = (await res.json()) as GraphData;
+      const json = (await getGraphNetwork({
+        limit: 100,
+        tier: entityOnly ? 'entity' : undefined,
+        includeLineage,
+      })) as unknown as GraphData;
       setData(json);
     } catch (err) {
       console.error('Failed to load graph:', err);
@@ -83,7 +116,39 @@ export default function GraphView() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [entityOnly, includeLineage]);
+
+  // Re-fetch whenever the toggles change (and on mount).
+  useEffect(() => {
+    loadNetwork();
+  }, [loadNetwork]);
+
+  // Drill into event->event provenance for the selected node. Non-fatal: any
+  // failure (non-event node, no lineage, network error) just shows "no lineage".
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedNode || selectedNode.type !== 'event') {
+      setLineage(null);
+      setLineageLoading(false);
+      return;
+    }
+    setLineage(null);
+    setLineageLoading(true);
+    (async () => {
+      try {
+        const res = await getLineage(selectedNode.id);
+        if (!cancelled) setLineage(res);
+      } catch (err) {
+        console.error('Failed to load lineage:', err);
+        if (!cancelled) setLineage({ parents: [], children: [] });
+      } finally {
+        if (!cancelled) setLineageLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedNode]);
 
   const filteredNodes = data.nodes.filter((n) => {
     if (entityTypeFilter !== 'all' && n.type === 'entity' && n.entityType !== entityTypeFilter) return false;
@@ -101,6 +166,9 @@ export default function GraphView() {
 
   const hasData = !loading && filteredNodes.length > 0;
   const isEmpty = !loading && filteredNodes.length === 0 && !error;
+
+  const selectedIsEvent = selectedNode?.type === 'event';
+  const hasLineage = !!lineage && (lineage.parents.length > 0 || lineage.children.length > 0);
 
   return (
     <div style={{ display: 'flex', height: '100%', background: colors.base }}>
@@ -131,6 +199,28 @@ export default function GraphView() {
           </select>
         </div>
 
+        {/* 006 graph toggles — re-fetch on change via the loadNetwork effect. */}
+        <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={entityOnly}
+              onChange={(e) => setEntityOnly(e.target.checked)}
+              disabled={loading}
+            />
+            <span>Entity-only<span style={{ color: colors.dim }}> (collapse descriptors)</span></span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={includeLineage}
+              onChange={(e) => setIncludeLineage(e.target.checked)}
+              disabled={loading}
+            />
+            <span>Include lineage<span style={{ color: colors.dim }}> (event→event)</span></span>
+          </label>
+        </div>
+
         <div style={{ fontSize: 12, color: colors.dim, marginBottom: 12 }}>
           Nodes: {filteredNodes.length} | Links: {filteredLinks.length}
         </div>
@@ -142,6 +232,28 @@ export default function GraphView() {
         >
           {loading ? 'Loading...' : '🔄 Refresh'}
         </button>
+
+        {/* 006 export buttons. GEXF + Sigma export the current view; Tree needs a root. */}
+        <div style={{ marginBottom: 16 }}>
+          <h4 style={{ margin: '0 0 8px', fontSize: 12, color: colors.dim }}>Export</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <a href={graphExportUrl('gexf', graphOpts)} download style={exportLinkStyle(false)}>
+              ⬇ GEXF (Gephi)
+            </a>
+            <a href={graphExportUrl('sigma', graphOpts)} download style={exportLinkStyle(false)}>
+              ⬇ Sigma JSON
+            </a>
+            <a
+              href={selectedNode ? graphExportUrl('tree', { ...graphOpts, root: selectedNode.id }) : undefined}
+              download
+              aria-disabled={!selectedNode}
+              style={exportLinkStyle(!selectedNode)}
+              title={selectedNode ? `Tree rooted at ${selectedNode.id}` : 'Select a node to export its tree'}
+            >
+              ⬇ Tree {selectedNode ? '(from selection)' : '(select a node)'}
+            </a>
+          </div>
+        </div>
 
         {selectedNode && (
           <div style={{ background: colors.base, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 16, border: `1px solid ${colors.border}` }}>
@@ -161,6 +273,20 @@ export default function GraphView() {
                 <strong>Type:</strong>{' '}
                 <span style={{ color: entityColor(selectedNode.entityType) }}>{selectedNode.entityType}</span>
               </p>
+            )}
+
+            {/* 006 lineage drill-down — only meaningful for event nodes. */}
+            {selectedIsEvent && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
+                <h4 style={{ margin: '0 0 6px', fontSize: 12, color: colors.dim }}>Lineage</h4>
+                {lineageLoading ? (
+                  <div style={{ fontSize: 12, color: colors.dim }}>Loading lineage…</div>
+                ) : hasLineage ? (
+                  <LineagePanel lineage={lineage!} />
+                ) : (
+                  <div style={{ fontSize: 12, color: colors.muted }}>no lineage</div>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -242,6 +368,46 @@ export default function GraphView() {
   );
 }
 
+// Renders the parents/children of the selected event's provenance lineage.
+function LineagePanel({ lineage }: { lineage: Lineage }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <LineageGroup title="Parents" neighbors={lineage.parents} />
+      <LineageGroup title="Children" neighbors={lineage.children} />
+    </div>
+  );
+}
+
+function LineageGroup({ title, neighbors }: { title: string; neighbors: LineageNeighbor[] }) {
+  if (neighbors.length === 0) return null;
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: colors.dim, marginBottom: 4 }}>
+        {title} ({neighbors.length})
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {neighbors.map((n) => (
+          <div
+            key={`${title}-${n.eventId}-${n.relation}`}
+            style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 8px' }}
+          >
+            <div style={{ fontSize: 12, color: colors.text, wordBreak: 'break-word' }}>
+              {n.title || n.eventId}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4, fontSize: 10 }}>
+              {n.kind && (
+                <span style={{ color: kindColors[n.kind] || colors.accent }}>{n.kind}</span>
+              )}
+              <span style={{ color: colors.teal }}>{n.relation}</span>
+              {n.processor && <span style={{ color: colors.muted }}>· {n.processor}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Simple error boundary for the graph component
 class ErrorBoundary extends React.Component<{ children: React.ReactNode; fallback: React.ReactNode }, { hasError: boolean }> {
   constructor(props: { children: React.ReactNode; fallback: React.ReactNode }) {
@@ -256,5 +422,3 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode; fallbac
     return this.props.children;
   }
 }
-
-

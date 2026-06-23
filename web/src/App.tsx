@@ -14,10 +14,14 @@ import GraphView from './components/GraphView.js';
 import MitreMatrixView from './components/MitreMatrixView.js';
 import OsintHub from './components/OsintHub.js';
 import DiscoverPanel from './components/DiscoverPanel.js';
+import AoiPanel from './components/AoiPanel.js';
+import SubscriptionsPanel from './components/SubscriptionsPanel.js';
+import CvPanel from './components/CvPanel.js';
 
 type TabKey =
   | 'overview' | 'map' | 'events' | 'live' | 'signals' | 'health'
-  | 'brief' | 'discover' | 'channels' | 'sources' | 'graph' | 'mitre' | 'osint' | 'stats';
+  | 'brief' | 'discover' | 'channels' | 'subs' | 'sources' | 'aoi' | 'cv'
+  | 'graph' | 'mitre' | 'osint' | 'stats';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
@@ -34,7 +38,10 @@ export default function App() {
     { key: 'brief', label: '📰 Brief', component: <BriefPanel /> },
     { key: 'discover', label: '🧭 Discover', component: <DiscoverPanel /> },
     { key: 'channels', label: '📣 Channels', component: <ChannelsPanel /> },
+    { key: 'subs', label: '🔔 Subscriptions', component: <SubscriptionsPanel /> },
     { key: 'sources', label: '📡 Sources', component: <SourcePanel /> },
+    { key: 'aoi', label: '🎯 AOI', component: <AoiPanel /> },
+    { key: 'cv', label: '🎥 CV', component: <CvPanel /> },
     { key: 'graph', label: '🔗 Graph', component: <GraphView /> },
     { key: 'mitre', label: '🛡️ ATT&CK', component: <MitreMatrixView /> },
     { key: 'osint', label: '🧰 OSINT', component: <OsintHub /> },

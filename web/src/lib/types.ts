@@ -9,6 +9,14 @@ export interface ScoreComponents {
   base: number;
 }
 
+// 006: discrete band + finding-class axis.
+export type RiskBand = 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH';
+export type TriageState = 'open' | 'acknowledged' | 'dismissed';
+export type DataClass =
+  | 'hazard_alert' | 'cyber_ioc' | 'vulnerability' | 'breach_leak' | 'leaked_secret'
+  | 'exposed_service' | 'malware' | 'phishing' | 'defacement' | 'recon_finding'
+  | 'cv_detection' | 'social_post' | 'news' | 'research' | 'other';
+
 export interface IntelEvent {
   id: string;
   sourceId: string;
@@ -17,7 +25,9 @@ export interface IntelEvent {
   content: string;
   confidence: number;
   score?: number;
-  scoreComponents?: ScoreComponents;
+  scoreComponents?: ScoreComponents & { aoi?: number };
+  riskBand?: RiskBand;
+  dataClass?: DataClass;
   eventAt: number;
   createdAt?: number;
   tags: Record<string, unknown>;
@@ -47,7 +57,10 @@ export type SignalKind =
   | 'velocity_spike'
   | 'silent_source'
   | 'volume_anomaly'
-  | 'cluster_surge';
+  | 'cluster_surge'
+  | 'outlier'
+  | 'uncorroborated'
+  | 'rule_match';
 
 export interface IntelSignal {
   id: string;
@@ -63,6 +76,56 @@ export interface IntelSignal {
   windowEnd?: number;
   metadata?: Record<string, unknown>;
   createdAt: number;
+  // 006: operator triage + discrete band.
+  triageState?: TriageState;
+  mutedUntil?: number;
+  riskBand?: RiskBand;
+}
+
+export interface SignalMute {
+  dedupeKey: string;
+  mutedUntil?: number;
+  reason?: string;
+}
+
+// 006: Area of Interest (scope weighting).
+export type AoiKind = 'geo_bbox' | 'geo_radius' | 'country' | 'region' | 'entity' | 'domain' | 'keyword';
+export interface AoiRule {
+  id: string;
+  name: string;
+  kind: AoiKind;
+  definition: Record<string, unknown>;
+  weight: number;
+  enabled: boolean;
+  createdAt: number;
+}
+
+// Per-source delivery subscription (pre-existing /subscriptions route).
+export type DeliveryMode = 'passive' | 'proactive' | 'alert';
+export interface Subscription {
+  id: string;
+  userId: string;
+  sourceId: string;
+  filterQuery?: string;
+  minConfidence: number;
+  allowedKinds?: string[];
+  deliveryMode: DeliveryMode;
+  digestCron?: string;
+  lastDeliveredAt?: number;
+  createdAt: number;
+}
+
+// CV (computer-vision sidecar) read shapes — kept loose; server is source of truth.
+export interface CvAlertRow {
+  id?: string;
+  sourceId?: string;
+  type?: string;
+  value?: number;
+  threshold?: number;
+  severity?: string;
+  createdAt?: number;
+  eventAt?: number;
+  [k: string]: unknown;
 }
 
 export interface Brief {
