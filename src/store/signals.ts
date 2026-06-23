@@ -39,6 +39,17 @@ export async function signalDedupeExists(dedupeKey: string, since: number): Prom
   return Number(rows[0]?.count ?? 0) > 0;
 }
 
+/**
+ * True if a signal with this dedupe key should be SUPPRESSED right now (006):
+ * either it already fired within the dedupe window OR an operator has muted the
+ * key (signal_mutes). The convergence / freshness / rule-engine detectors gate on
+ * this before inserting, so a muted recurring signal stops re-firing at the source.
+ */
+export async function isSuppressed(dedupeKey: string, since: number, now: number = Date.now()): Promise<boolean> {
+  if (await isMuted(dedupeKey, now)) return true;
+  return signalDedupeExists(dedupeKey, since);
+}
+
 export async function listSignals(opts: {
   kinds?: SignalKind[];
   since?: number;

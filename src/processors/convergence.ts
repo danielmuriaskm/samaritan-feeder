@@ -1,6 +1,6 @@
 import { query } from '../db.js';
 import { bus } from '../bus.js';
-import { insertSignal, signalDedupeExists } from '../store/signals.js';
+import { insertSignal, isSuppressed } from '../store/signals.js';
 import type { IntelSignal, SourceKind, EventKind } from '../types.js';
 
 /**
@@ -607,7 +607,7 @@ export async function runConvergence(opts: RunConvergenceOptions = {}): Promise<
   const sourceConvs = detectSourceTypeConvergence(events, { windowMs });
   for (const conv of sourceConvs) {
     const dedupeKey = `conv:cluster:${conv.clusterId}:fam:${conv.families.join('+')}`;
-    if (await signalDedupeExists(dedupeKey, dedupeSince)) continue;
+    if (await isSuppressed(dedupeKey, dedupeSince, now)) continue;
     const sig = await insertSignal({
       kind: 'convergence',
       score: conv.score,
@@ -629,7 +629,7 @@ export async function runConvergence(opts: RunConvergenceOptions = {}): Promise<
   const geoConvs = detectGeoConvergence(events, { windowMs });
   for (const geo of geoConvs) {
     const dedupeKey = `geoconv:cell:${geo.cellKey}:kinds:${geo.kinds.join('+')}`;
-    if (await signalDedupeExists(dedupeKey, dedupeSince)) continue;
+    if (await isSuppressed(dedupeKey, dedupeSince, now)) continue;
     const sig = await insertSignal({
       kind: 'geo_convergence',
       score: geo.score,
@@ -651,7 +651,7 @@ export async function runConvergence(opts: RunConvergenceOptions = {}): Promise<
   const outliers = detectOutliers(events);
   for (const o of outliers) {
     const dedupeKey = `outlier:${o.axis}:${o.bucketKey}`;
-    if (await signalDedupeExists(dedupeKey, dedupeSince)) continue;
+    if (await isSuppressed(dedupeKey, dedupeSince, now)) continue;
     const sharePct = (o.share * 100).toFixed(1);
     const sig = await insertSignal({
       kind: 'outlier',
@@ -675,7 +675,7 @@ export async function runConvergence(opts: RunConvergenceOptions = {}): Promise<
   const uncorroborated = detectSingleFamilyOnly(events, { windowMs });
   for (const u of uncorroborated) {
     const dedupeKey = `uncorr:cluster:${u.clusterId}`;
-    if (await signalDedupeExists(dedupeKey, dedupeSince)) continue;
+    if (await isSuppressed(dedupeKey, dedupeSince, now)) continue;
     const sig = await insertSignal({
       kind: 'uncorroborated',
       score: u.score,

@@ -1,10 +1,11 @@
 import { readdirSync, readFileSync, existsSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import yaml from 'js-yaml';
+// js-yaml v5 is ESM-native with NAMED exports (no default export under import).
+import { load as yamlLoad } from 'js-yaml';
 
 import { bus } from '../bus.js';
-import { insertSignal, signalDedupeExists } from '../store/signals.js';
+import { insertSignal, isSuppressed } from '../store/signals.js';
 import { deriveRiskBand } from '../scoring/severity.js';
 import {
   kindToFamily,
@@ -525,7 +526,7 @@ export function loadRules(dir?: string): Rule[] {
     const path = join(chosen, file);
     let parsed: unknown;
     try {
-      parsed = yaml.load(readFileSync(path, 'utf-8'));
+      parsed = yamlLoad(readFileSync(path, 'utf-8'));
     } catch (err) {
       console.warn(`[ruleEngine] skipping ${file}: YAML parse error: ${String(err)}`);
       continue;
@@ -605,7 +606,7 @@ export async function runRuleEngine(opts: RunRuleEngineOptions = {}): Promise<Ru
     for (const match of matches) {
       try {
         const dedupeKey = `rule:${rule.id}:${match.groupKey}`;
-        if (await signalDedupeExists(dedupeKey, dedupeSince)) continue;
+        if (await isSuppressed(dedupeKey, dedupeSince, now)) continue;
 
         const score = RISK_SCORE[rule.meta.risk];
         const title = interpolateHeadline(rule.headline, match);
