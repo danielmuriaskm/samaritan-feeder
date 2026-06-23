@@ -48,6 +48,11 @@ signalRoutes.get('/', async (c) => {
 });
 // 006: muted dedupe keys (registered BEFORE /:id so it isn't shadowed by the param route).
 signalRoutes.get('/mutes', async (c) => c.json({ mutes: await listMutes() }));
+// 006: unmute directly by dedupe key (the muted-keys list has no signal id).
+signalRoutes.delete('/mutes/:key', async (c) => {
+  await unmuteDedupeKey(c.req.param('key'));
+  return c.json({ ok: true });
+});
 // 006: drill-down — the signal plus the member events behind it (eventIds persisted at creation).
 signalRoutes.get('/:id', async (c) => {
   const sig = await getSignal(c.req.param('id'));

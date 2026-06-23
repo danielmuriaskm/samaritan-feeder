@@ -163,14 +163,25 @@ const SOURCE_KINDS: SourceKindDef[] = [
     { key: 'apiKey', label: 'API Key', type: 'password', placeholder: 'your_key', required: true },
     { key: 'query', label: 'Query', type: 'text', placeholder: 'breaking', required: true },
   ]},
+  // Hazard & Cyber — authoritative, keyless feeds (no config required)
+  { kind: 'usgs', label: 'USGS Earthquakes', icon: '🌎', category: 'Hazard & Cyber', fields: [] },
+  { kind: 'eonet', label: 'NASA EONET (natural events)', icon: '🛰️', category: 'Hazard & Cyber', fields: [] },
+  { kind: 'gdacs', label: 'GDACS (global disasters)', icon: '🆘', category: 'Hazard & Cyber', fields: [] },
+  { kind: 'nws', label: 'NWS Alerts (US weather)', icon: '⛈️', category: 'Hazard & Cyber', fields: [] },
+  { kind: 'abusech', label: 'abuse.ch (malware/threat feeds)', icon: '🦠', category: 'Hazard & Cyber', fields: [] },
+  { kind: 'ngamsi', label: 'NGA MSI (maritime safety)', icon: '⚓', category: 'Hazard & Cyber', fields: [] },
+  { kind: 'reliefweb', label: 'ReliefWeb (humanitarian)', icon: '🤝', category: 'Hazard & Cyber', fields: [] },
+  { kind: 'openphish', label: 'OpenPhish (phishing URLs)', icon: '🎣', category: 'Hazard & Cyber', fields: [] },
+  { kind: 'zoneh', label: 'Zone-H (defacements)', icon: '💥', category: 'Hazard & Cyber', fields: [] },
 ];
 
-const CATEGORY_ORDER = ['Social & News', 'OSINT', 'Cameras & Geo', 'Data'];
+const CATEGORY_ORDER = ['Social & News', 'OSINT', 'Cameras & Geo', 'Data', 'Hazard & Cyber'];
 const CATEGORY_COLORS: Record<string, string> = {
   'Social & News': colors.purple,
   'OSINT': colors.critical,
   'Cameras & Geo': colors.normal,
   'Data': colors.info,
+  'Hazard & Cyber': colors.elevated,
 };
 
 const kindIcons: Record<string, string> = {
@@ -180,6 +191,8 @@ const kindIcons: Record<string, string> = {
   gdelt: '🌍', github: '💻', arxiv: '📄', windy: '🌬️',
   shodan: '🌐', censys: '🔍', crtsh: '📜', virustotal: '🛡️', hibp: '💀',
   webcrawl: '🕷️', twitter_scrape: '🐦', reddit_scrape: '🤖', sherlock: '🔎',
+  usgs: '🌎', eonet: '🛰️', gdacs: '🆘', nws: '⛈️', abusech: '🦠',
+  ngamsi: '⚓', reliefweb: '🤝', openphish: '🎣', zoneh: '💥',
 };
 
 function getHealthStatus(source: Source): 'healthy' | 'warning' | 'critical' | 'disabled' {

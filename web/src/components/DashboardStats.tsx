@@ -1,5 +1,22 @@
 import { useEffect, useState } from 'react';
 import { colors, kindColors, entityColors, healthColors } from '../lib/theme.js';
+import type { RiskBand } from '../lib/types.js';
+
+// 006: derived risk-band distribution of recent events (optional — absent on older payloads).
+interface RiskMatrix {
+  counts?: Record<string, number>;
+  bands?: Array<{ band: string; count: number }>;
+  window?: string;
+}
+
+// Band -> wm-* accent. HIGH red, MEDIUM amber, LOW blue, INFO grey.
+const riskBandColors: Record<RiskBand, string> = {
+  HIGH: colors.critical,
+  MEDIUM: colors.elevated,
+  LOW: colors.low,
+  INFO: colors.muted,
+};
+const RISK_BAND_ORDER: RiskBand[] = ['HIGH', 'MEDIUM', 'LOW', 'INFO'];
 
 interface Stats {
   sources: {
@@ -16,6 +33,7 @@ interface Stats {
     kindBreakdown: Record<string, number>;
     topSources: Array<{ sourceId: string; count: number }>;
     timeline: Array<[string, number]>;
+    riskMatrix?: RiskMatrix;
   };
   entities: {
     total: number;
@@ -48,6 +66,11 @@ export default function DashboardStats() {
 
   const maxTimeline = Math.max(1, ...stats.events.timeline.map(([, c]) => c));
   const maxKind = Math.max(1, ...Object.values(stats.events.kindBreakdown));
+
+  // 006: normalize the risk matrix to an ordered [{band,count}] list.
+  // Prefer the pre-ordered `bands` array; fall back to `counts`; skip the block if neither is present.
+  const riskBands = deriveRiskBands(stats.events.riskMatrix);
+  const maxRisk = Math.max(1, ...riskBands.map((b) => b.count));
 
   return (
     <div style={{ padding: '20px 24px', overflowY: 'auto', minHeight: '100%' }}>
@@ -133,6 +156,33 @@ export default function DashboardStats() {
             )}
           </div>
         </Section>
+
+        {/* Risk Matrix (006) — skipped entirely on older payloads without riskMatrix */}
+        {riskBands.length > 0 && (
+          <Section title={`🎯 Risk Matrix${stats.events.riskMatrix?.window ? ` (${stats.events.riskMatrix.window})` : ''}`}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '4px 0' }}>
+              {riskBands.map(({ band, count }) => {
+                const color = riskBandColors[band as RiskBand] || colors.muted;
+                return (
+                  <div key={band} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ width: 70, fontSize: 12, fontWeight: 700, color, fontFamily: 'var(--wm-font-mono)' }}>{band}</span>
+                    <div style={{ flex: 1, height: 18, background: 'var(--wm-hover)', borderRadius: 4, overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${(count / maxRisk) * 100}%`,
+                          height: '100%',
+                          background: color,
+                          borderRadius: 4,
+                        }}
+                      />
+                    </div>
+                    <span style={{ width: 40, fontSize: 12, color: colors.dim, textAlign: 'right', fontFamily: 'var(--wm-font-mono)', fontVariantNumeric: 'tabular-nums' }}>{count}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </Section>
+        )}
 
         {/* Sources by Kind */}
         <Section title="📡 Sources by Kind">
@@ -287,6 +337,22 @@ function HealthBar({ label, count, total, color }: { label: string; count: numbe
       </div>
     </div>
   );
+}
+
+// Normalize the 006 riskMatrix into an ordered HIGH->INFO list of {band,count}.
+// Prefer the pre-ordered `bands` array; otherwise project `counts` onto the canonical
+// band order; returns [] when neither is present (older payload) so the block is skipped.
+function deriveRiskBands(matrix?: RiskMatrix): Array<{ band: string; count: number }> {
+  if (matrix?.bands?.length) {
+    return matrix.bands.map((b) => ({ band: b.band, count: b.count }));
+  }
+  if (matrix?.counts) {
+    const counts = matrix.counts;
+    return RISK_BAND_ORDER
+      .filter((band) => band in counts)
+      .map((band) => ({ band, count: counts[band] ?? 0 }));
+  }
+  return [];
 }
 
 function formatUptime(seconds: number): string {
