@@ -1,5 +1,6 @@
 import { query, one, exec } from '../db.js';
-import type { EventKind, IntelligenceEvent } from '../types.js';
+import type { EventKind, IntelligenceEvent, RiskBand, DataClass } from '../types.js';
+import { deriveDataClass } from '../lib/dataClass.js';
 import { createHash } from 'crypto';
 
 export async function listEvents(opts: {
@@ -208,8 +209,8 @@ export async function createEvent(event: Omit<IntelligenceEvent, 'createdAt'>): 
     `INSERT INTO intelligence_events
      (id, source_id, kind, title, content, raw_data, media_urls, embedding,
       vector_v, confidence, sensitivity, tags, location_lat, location_lon,
-      event_at, created_at, dedupe_hash, score, score_components)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      event_at, created_at, dedupe_hash, score, score_components, risk_band, data_class)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
     [
       event.id, event.sourceId, event.kind, event.title ?? null, event.content,
       event.rawData ? JSON.stringify(event.rawData) : null,
@@ -223,6 +224,8 @@ export async function createEvent(event: Omit<IntelligenceEvent, 'createdAt'>): 
       event.eventAt, now, event.dedupeHash ?? null,
       event.score ?? null,
       event.scoreComponents ? JSON.stringify(event.scoreComponents) : null,
+      event.riskBand ?? null,
+      event.dataClass ?? null,
     ],
   );
   return { ...event, createdAt: now };
@@ -246,6 +249,126 @@ export async function deleteOldEvents(before: number): Promise<number> {
 
 export function makeDedupeHash(sourceId: string, content: string): string {
   return createHash('sha256').update(`${sourceId}:${content}`).digest('hex').slice(0, 32);
+}
+
+// ---------------------------------------------------------------------------
+// 006: event lineage (provenance) + data-class backfill.
+//
+// The ~16 recon processors already stamp `tags.parent_event_id` (and
+// `tags.recon_type`) on every derived event but nothing reads it. This promotes
+// that trapped provenance into the indexed `event_lineage` edge table and fills
+// in `data_class` — both via ONE idempotent bulk sweep over recent rows, so no
+// per-processor edits are needed. Also exposes a single-event lineage read.
+// ---------------------------------------------------------------------------
+
+/** Insert one event→event provenance edge (idempotent). */
+export async function recordLineage(
+  childEventId: string,
+  parentEventId: string,
+  relation = 'derived',
+  processor?: string,
+): Promise<void> {
+  if (!childEventId || !parentEventId || childEventId === parentEventId) return;
+  await exec(
+    `INSERT INTO event_lineage (child_event_id, parent_event_id, relation, processor, created_at)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (child_event_id, parent_event_id, relation) DO NOTHING`,
+    [childEventId, parentEventId, relation, processor ?? null, Date.now()],
+  );
+}
+
+export interface LineageSweepResult { scanned: number; edges: number; classified: number }
+
+/**
+ * Backfill event_lineage edges from `tags.parent_event_id` and `data_class` from
+ * kind+tags, over events since `sinceMs`. Idempotent (ON CONFLICT / only fills
+ * NULL data_class), bounded by `limit`, and off the hot path (cron). Returns counts.
+ */
+export async function runLineageSweep(sinceMs: number, limit = 4000): Promise<LineageSweepResult> {
+  const rows = await query<{ id: string; kind: string; tags: unknown; data_class: string | null }>(
+    `SELECT id, kind, tags, data_class FROM intelligence_events
+      WHERE created_at >= $1 ORDER BY created_at DESC LIMIT $2`,
+    [sinceMs, limit],
+  );
+
+  let edges = 0;
+  let classified = 0;
+  for (const r of rows) {
+    const tags =
+      r.tags == null ? {} : typeof r.tags === 'string' ? safeParse(r.tags) : (r.tags as Record<string, unknown>);
+
+    const parent = tags.parent_event_id;
+    if (typeof parent === 'string' && parent && parent !== r.id) {
+      const processor = typeof tags.recon_type === 'string' ? tags.recon_type : undefined;
+      await recordLineage(r.id, parent, 'derived', processor);
+      edges += 1;
+    }
+
+    if (!r.data_class) {
+      const dc = deriveDataClass({ kind: r.kind as EventKind, tags });
+      if (dc) {
+        await exec(`UPDATE intelligence_events SET data_class = $1 WHERE id = $2 AND data_class IS NULL`, [dc, r.id]);
+        classified += 1;
+      }
+    }
+  }
+  return { scanned: rows.length, edges, classified };
+}
+
+export interface LineageNeighbor {
+  eventId: string;
+  relation: string;
+  processor?: string;
+  title?: string;
+  kind?: string;
+  eventAt?: number;
+}
+
+/**
+ * Parents and children of an event, hydrated with title/kind/time where the
+ * neighbor still exists (retention may have purged it — those degrade to id-only,
+ * not an error).
+ */
+export async function getEventLineage(
+  eventId: string,
+): Promise<{ parents: LineageNeighbor[]; children: LineageNeighbor[] }> {
+  const parents = await query<Record<string, unknown>>(
+    `SELECT l.parent_event_id AS event_id, l.relation, l.processor,
+            e.title, e.kind, e.event_at
+       FROM event_lineage l
+       LEFT JOIN intelligence_events e ON e.id = l.parent_event_id
+      WHERE l.child_event_id = $1
+      ORDER BY e.event_at DESC NULLS LAST`,
+    [eventId],
+  );
+  const children = await query<Record<string, unknown>>(
+    `SELECT l.child_event_id AS event_id, l.relation, l.processor,
+            e.title, e.kind, e.event_at
+       FROM event_lineage l
+       LEFT JOIN intelligence_events e ON e.id = l.child_event_id
+      WHERE l.parent_event_id = $1
+      ORDER BY e.event_at DESC NULLS LAST`,
+    [eventId],
+  );
+  const map = (rows: Record<string, unknown>[]): LineageNeighbor[] =>
+    rows.map((r) => ({
+      eventId: String(r.event_id),
+      relation: String(r.relation),
+      processor: r.processor ? String(r.processor) : undefined,
+      title: r.title ? String(r.title) : undefined,
+      kind: r.kind ? String(r.kind) : undefined,
+      eventAt: r.event_at != null ? Number(r.event_at) : undefined,
+    }));
+  return { parents: map(parents), children: map(children) };
+}
+
+function safeParse(s: string): Record<string, unknown> {
+  try {
+    const v = JSON.parse(s);
+    return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 // In-process dedupe reservation. dedupeExists() (a DB read) and createEvent() (the
@@ -302,6 +425,8 @@ function fromRow(row: Record<string, unknown>): IntelligenceEvent {
           ? JSON.parse(row.score_components)
           : (row.score_components as IntelligenceEvent['scoreComponents']))
       : undefined,
+    riskBand: row.risk_band ? (String(row.risk_band) as RiskBand) : undefined,
+    dataClass: row.data_class ? (String(row.data_class) as DataClass) : undefined,
   };
 }
 

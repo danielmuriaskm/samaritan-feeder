@@ -21,9 +21,11 @@ const TIER_BY_KIND: Record<SourceKind, SourceTier> = {
   usgs: 1, eonet: 1, gdacs: 1, nws: 1, reliefweb: 1, ngamsi: 1, stix: 1,
   shodan: 1, censys: 1, crtsh: 1, virustotal: 1, hibp: 1, greynoise: 1, urlscan: 1, abusech: 1,
   nvd: 1, // NIST NVD — authoritative CVE feed
+  openphish: 1, // curated phishing IOC feed (authoritative, like abuse.ch)
   // Tier 2 — established editorial / direct observation
   rss: 2, news_api: 2, gdelt: 2, hn: 2, arxiv: 2, github: 2, youtube: 2,
   webcam: 2, traffic_cam: 2, weather_cam: 2, ip_camera: 2, windy: 2,
+  zoneh: 2, // direct observation of defacements, but self-reported -> tier 2
   // Tier 3 — social
   twitter: 3, reddit: 3, bluesky: 3, instagram: 3, tiktok: 3, telegram: 3, discord: 3,
   // Tier 4 — scraped / anonymous

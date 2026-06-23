@@ -43,7 +43,11 @@ export type SourceKind =
   | 'reliefweb'
   // NVD CVE feed (NIST National Vulnerability Database, API v2 JSON). Replaces
   // the retired nvd-rss.xml that now 403s — see src/adapters/nvd.ts.
-  | 'nvd';
+  | 'nvd'
+  // Phishing IOC firehoses (keyless) + near-real-time defacement feed. See
+  // src/adapters/{openphish,zoneh}.ts. (SpiderFoot-inspired ports, MIT.)
+  | 'openphish'
+  | 'zoneh';
 
 export type EventKind = 'visual' | 'text' | 'anomaly' | 'trend' | 'alert' | 'social_post' | 'detection';
 
@@ -266,6 +270,11 @@ export interface IntelligenceEvent {
   /** Composite importance score in 0..1 (005). Ordering key for "most important first". */
   score?: number;
   scoreComponents?: ScoreComponents;
+  // --- 006 ---
+  /** Discrete band derived from `score` (scoring/severity.ts). */
+  riskBand?: RiskBand;
+  /** Optional finding-class label (lib/dataClass.ts). */
+  dataClass?: DataClass;
 }
 
 /** Breakdown of the composite event score (scoring/score.ts). */
@@ -276,6 +285,8 @@ export interface ScoreComponents {
   sourceTrust: number;
   freshness: number;
   base: number;
+  /** 006: Area-of-Interest match strength (0..1), present only when an AOI is configured and matched. */
+  aoi?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +299,45 @@ export type SignalKind =
   | 'velocity_spike'
   | 'silent_source'
   | 'volume_anomaly'
-  | 'cluster_surge';
+  | 'cluster_surge'
+  // 006 (SpiderFoot-inspired): rarity outlier, single-family/uncorroborated
+  // credibility flag, and generic declarative-rule matches.
+  | 'outlier'
+  | 'uncorroborated'
+  | 'rule_match';
+
+/**
+ * Discrete severity band derived from the composite score (scoring/severity.ts).
+ * The free-text/float score stays the ordering key; the band is a coarse triage
+ * filter ("show me HIGH only", push HIGH / digest the rest).
+ */
+export type RiskBand = 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH';
+
+/** Operator triage lifecycle for a signal (006). Default 'open'. */
+export type TriageState = 'open' | 'acknowledged' | 'dismissed';
+
+/**
+ * Optional second classification axis on an event — a coarse "what kind of
+ * finding" label so recon/hazard/cyber outputs become first-class queries
+ * ("all leaked_secret events this week"). Derived from kind + tags
+ * (lib/dataClass.ts); never required.
+ */
+export type DataClass =
+  | 'hazard_alert'
+  | 'cyber_ioc'
+  | 'vulnerability'
+  | 'breach_leak'
+  | 'leaked_secret'
+  | 'exposed_service'
+  | 'malware'
+  | 'phishing'
+  | 'defacement'
+  | 'recon_finding'
+  | 'cv_detection'
+  | 'social_post'
+  | 'news'
+  | 'research'
+  | 'other';
 
 export interface IntelSignal {
   id: string;
@@ -305,6 +354,13 @@ export interface IntelSignal {
   dedupeKey?: string;
   metadata?: Record<string, unknown>;
   createdAt: number;
+  // --- 006: operator triage + discrete band ---
+  /** Operator lifecycle. Absent rows are treated as 'open'. */
+  triageState?: TriageState;
+  /** If set and in the future, the signal is muted (suppressed) until this ms. */
+  mutedUntil?: number;
+  /** Discrete band derived from `score`. */
+  riskBand?: RiskBand;
 }
 
 export type ChannelKind = 'telegram' | 'discord' | 'slack' | 'webhook' | 'email' | 'samaritan';
