@@ -14,9 +14,10 @@ meta:
     Multiple authoritative hazard / government feeds (USGS, NWS, GDACS, EONET,
     ReliefWeb, ...) reporting in the SAME ~1-degree geo cell. We collect events
     from the `hazard_gov` source family, group them by geo cell, and fire when at
-    least 2 DISTINCT sources land in one cell. Independent authoritative feeds
-    converging on a location is a strong corroboration signal that something real
-    is happening there (earthquake + weather alert + disaster bulletin).
+    least 2 DISTINCT source KINDS (e.g. usgs + nws) land in one cell. Independent
+    authoritative feed types converging on a location is a strong corroboration
+    signal that something real is happening there (earthquake + weather alert +
+    disaster bulletin).
   risk: HIGH
 
 # Collect: authoritative hazard/gov events. (geoCell resolution drops any that
@@ -30,8 +31,8 @@ collect:
 aggregate:
   field: geoCell
 
-# Fire when at least 2 DISTINCT sources converge on the cell (count_unique on
-# sourceId), so repeated polls of one feed don't fabricate convergence.
+# Fire when at least 2 DISTINCT source kinds converge on the cell (count_unique on
+# sourceKind), so repeated polls of one feed don't fabricate convergence.
 analysis:
   method: threshold
   minCount: 2

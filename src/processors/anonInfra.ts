@@ -29,7 +29,7 @@ const TOR_TTL_MS = 60 * 60 * 1000; // ~1h
 const PROXY_TTL_MS = 24 * 60 * 60 * 1000; // ~24h
 
 const TOR_EXITS_URL =
-  'https://onionoo.torproject.org/details?type=relay&flag=Exit&fields=or_addresses';
+  'https://onionoo.torproject.org/details?type=relay&flag=Exit&fields=or_addresses,exit_addresses';
 
 // Multiproxy-style open-proxy feed. The canonical multiproxy.org endpoint is
 // largely dead in 2026; this is kept as a best-effort source and is allowed to
@@ -78,11 +78,19 @@ async function fetchTorExits(): Promise<Set<string> | null> {
   try {
     const res = await safeFetch(TOR_EXITS_URL, { timeoutMs: 20000 });
     if (!res.ok) return null;
-    const data = (await res.json()) as { relays?: Array<{ or_addresses?: string[] }> };
+    const data = (await res.json()) as {
+      relays?: Array<{ or_addresses?: string[]; exit_addresses?: string[] }>;
+    };
     const relays = Array.isArray(data.relays) ? data.relays : [];
     const next = new Set<string>();
     for (const relay of relays) {
-      const addrs = Array.isArray(relay.or_addresses) ? relay.or_addresses : [];
+      // OR addresses are "ip:port"; exit_addresses are bare IPs and are only
+      // present when the relay EXITS from a different address than its OR address
+      // — Tor exits commonly do, so missing these causes false negatives.
+      const addrs = [
+        ...(Array.isArray(relay.or_addresses) ? relay.or_addresses : []),
+        ...(Array.isArray(relay.exit_addresses) ? relay.exit_addresses : []),
+      ];
       for (const addr of addrs) {
         const ip = normalizeIp(String(addr));
         if (ip) next.add(ip);

@@ -184,6 +184,10 @@ export async function searchEvents(opts: {
   sourceId?: string;
   kinds?: EventKind[];
   since?: number;
+  until?: number;
+  dataClass?: DataClass;
+  riskBand?: RiskBand;
+  minScore?: number;
   limit?: number;
 }): Promise<IntelligenceEvent[]> {
   const conditions: string[] = [];
@@ -202,6 +206,10 @@ export async function searchEvents(opts: {
   if (opts.sourceId) { conditions.push(`source_id = $${idx++}`); params.push(opts.sourceId); }
   if (opts.kinds?.length) { conditions.push(`kind = ANY($${idx++}::text[])`); params.push(opts.kinds); }
   if (opts.since) { conditions.push(`event_at >= $${idx++}`); params.push(opts.since); }
+  if (opts.until) { conditions.push(`event_at <= $${idx++}`); params.push(opts.until); }
+  if (opts.dataClass) { conditions.push(`data_class = $${idx++}`); params.push(opts.dataClass); }
+  if (opts.riskBand) { conditions.push(`risk_band = $${idx++}`); params.push(opts.riskBand); }
+  if (typeof opts.minScore === 'number') { conditions.push(`COALESCE(score, confidence) >= $${idx++}`); params.push(opts.minScore); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 

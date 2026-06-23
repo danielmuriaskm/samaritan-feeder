@@ -70,6 +70,10 @@ app.get('/', async (c) => {
       sourceId: p.sourceId,
       kinds,
       since: p.since,
+      until: p.until,
+      dataClass,
+      riskBand,
+      minScore: p.minScore,
       limit: p.limit,
     });
   } else if (p.rank === 'score') {

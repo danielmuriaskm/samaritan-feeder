@@ -22,7 +22,7 @@ import { safeFetch } from '../util/safeFetch.js';
  */
 
 const OPENPHISH_FEED = 'https://openphish.com/feed.txt';
-const PHISHTANK_FEED = 'http://data.phishtank.com/data/online-valid.csv';
+const PHISHTANK_FEED = 'https://data.phishtank.com/data/online-valid.csv';
 const DEFAULT_CAP = 500;
 const MAX_CAP = 2000;
 

@@ -11,14 +11,15 @@ id: social_only_surge
 version: 1
 
 meta:
-  name: Social-only story surge
+  name: Social story surge
   description: >
-    An unfolding story being driven ONLY by social streams (reddit, twitter,
-    bluesky, tiktok, ...) with no wire/gov corroboration. We collect events whose
-    source family is `social`, group them by their NLP cluster id, and fire when
-    a single cluster carries at least 5 such social events. A large social-only
-    cluster is a soft credibility / virality signal worth a human glance — it may
-    be a real breaking story ahead of the wires, or coordinated amplification.
+    A large cluster of SOCIAL posts (reddit, twitter, bluesky, tiktok, ...) on one
+    story. We collect events whose source family is `social`, group them by their
+    NLP cluster id, and fire when a single cluster carries at least 5 such social
+    posts. This is a virality / amplification signal worth a human glance. NOTE:
+    this rule only measures social volume — it does NOT assert the absence of
+    wire/gov corroboration; the dedicated `uncorroborated` signal
+    (detectSingleFamilyOnly) is what actually tests cross-family absence.
   risk: LOW
 
 # Collect: keep only social-family events that carry a cluster id.
@@ -38,4 +39,4 @@ analysis:
   method: threshold
   minCount: 5
 
-headline: "Social-only surge in cluster {field} ({metric} posts, no wire/gov)"
+headline: "Social surge in cluster {field} ({metric} posts)"

@@ -6,6 +6,8 @@ import {
   detectSourceTypeConvergence,
   detectGeoConvergence,
   detectVelocitySpike,
+  detectOutliers,
+  detectSingleFamilyOnly,
   geoCell,
   scoreConvergence,
   type ConvergenceEvent,
@@ -189,4 +191,48 @@ test('velocity spikes are returned strongest-ratio first', () => {
   const spikes = detectVelocitySpike(counts, () => 1, { minCurrent: 1 });
   assert.equal(spikes.length, 2);
   assert.equal(spikes[0].clusterId, 'b'); // 12x before 6x
+});
+
+// --- (d) outlier / rarity ---------------------------------------------------
+test('detectOutliers flags a rare country bucket and ignores noisy/small data', () => {
+  // 19 events from common countries + 1 rare => the rare one is <=10% share.
+  const events: ConvergenceEvent[] = [];
+  for (let i = 0; i < 18; i++) events.push(ev({ id: `us${i}`, tags: { country: 'US' } }));
+  events.push(ev({ id: 'gb', tags: { country: 'GB' } }));
+  events.push(ev({ id: 'kp', tags: { country: 'KP' } })); // the rare one (1/20 = 5%)
+
+  const outliers = detectOutliers(events, { axes: ['country'] });
+  const kp = outliers.find((o) => o.bucketKey === 'KP');
+  assert.ok(kp, 'rare country should be flagged');
+  assert.ok(kp!.score > 0);
+  // The dominant US bucket (90%) must never be an outlier.
+  assert.equal(outliers.some((o) => o.bucketKey === 'US'), false);
+
+  // Below the minimum total, nothing fires (too little data to call rarity).
+  assert.equal(detectOutliers(events.slice(0, 5), { axes: ['country'] }).length, 0);
+});
+
+// --- (e) single-family / uncorroborated -------------------------------------
+test('detectSingleFamilyOnly needs a real social cluster, not a lone post', () => {
+  // A single social post in a cluster must NOT fire (the singleton-noise floor).
+  const lone = [ev({ id: 's1', sourceKind: 'reddit', tags: { cluster_id: 'c1' } })];
+  assert.equal(detectSingleFamilyOnly(lone).length, 0);
+
+  // 3 social posts, all same family, no wire/gov => fires as uncorroborated.
+  const socialOnly = [
+    ev({ id: 's2', sourceKind: 'reddit', tags: { cluster_id: 'c2' } }),
+    ev({ id: 's3', sourceKind: 'twitter', tags: { cluster_id: 'c2' } }),
+    ev({ id: 's4', sourceKind: 'bluesky', tags: { cluster_id: 'c2' } }),
+  ];
+  const fired = detectSingleFamilyOnly(socialOnly);
+  assert.equal(fired.length, 1);
+  assert.equal(fired[0].clusterId, 'c2');
+  assert.deepEqual(fired[0].families, ['social']);
+
+  // The same cluster corroborated by a wire item is NOT uncorroborated.
+  const corroborated = [
+    ...socialOnly,
+    ev({ id: 'w1', sourceKind: 'rss', tags: { cluster_id: 'c2' } }),
+  ];
+  assert.equal(detectSingleFamilyOnly(corroborated).length, 0);
 });

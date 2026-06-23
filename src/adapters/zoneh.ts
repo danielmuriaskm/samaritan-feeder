@@ -86,7 +86,7 @@ export class ZonehAdapter extends BaseAdapter {
     }
 
     return entries.slice(0, cap).map((entry) => {
-      const host = entry.host || hostOf(entry.link);
+      const host = entry.host; // defaced host (from title only); never the mirror permalink
       const dedupeSeed = host || entry.link || entry.title;
       return this.makeEvent(
         {
@@ -161,9 +161,10 @@ export function parseZonehRss(xml: string): ZonehEntry[] {
   for (const item of items) {
     const title = strOf(item.title);
     const link = strOf(item.link);
-    // Zone-H titles are typically the defaced host/URL; prefer parsing a host
-    // from the title, else from the link.
-    const host = hostFromTitle(title) || hostOf(link);
+    // Zone-H titles are the defaced host/URL; parse the host ONLY from the title.
+    // The <link> is the zone-h.org mirror permalink — never the defaced site — so
+    // it must NOT be used as the host, or reconDomain would enumerate zone-h.org.
+    const host = hostFromTitle(title);
     out.push({ host, title, link });
   }
   return out;

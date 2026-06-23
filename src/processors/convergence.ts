@@ -459,11 +459,17 @@ export function detectSingleFamilyOnly(
     windowMs?: number;
     only?: Set<SourceFamily>;
     absentFrom?: Set<SourceFamily>;
+    /** Minimum in-window members before a single-family cluster is worth flagging.
+     *  Without a floor every lone social post (with a cluster id) would fire — pure
+     *  noise. A meaningful "uncorroborated" cluster needs corroboration WITHIN the
+     *  family first, then the cross-family absence is the signal. */
+    minMembers?: number;
   } = {},
 ): SingleFamilyCluster[] {
   const windowMs = opts.windowMs ?? DEFAULT_WINDOW_MS;
   const only = opts.only ?? new Set<SourceFamily>(['social']);
   const absentFrom = opts.absentFrom ?? new Set<SourceFamily>(['wire_news', 'hazard_gov']);
+  const minMembers = opts.minMembers ?? 3;
 
   const byCluster = new Map<string, ConvergenceEvent[]>();
   for (const ev of events) {
@@ -479,7 +485,9 @@ export function detectSingleFamilyOnly(
     // Time-bound the cluster, mirroring detectSourceTypeConvergence.
     const latest = Math.max(...members.map((m) => m.eventAt));
     const inWindow = members.filter((m) => latest - m.eventAt <= windowMs);
-    if (inWindow.length === 0) continue;
+    // A lone (or near-lone) cluster corroborates nothing — require a real
+    // intra-family cluster before flagging it as conspicuously uncorroborated.
+    if (inWindow.length < minMembers) continue;
 
     const families = new Set<SourceFamily>();
     const sourceIds = new Set<string>();
