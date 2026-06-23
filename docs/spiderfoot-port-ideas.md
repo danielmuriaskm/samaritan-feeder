@@ -1,5 +1,12 @@
 # SpiderFoot → samaritan-feeder: portable ideas & features
 
+> **Status (2026-06-23):** IMPLEMENTED as the "006" layer on branch
+> `feat/spiderfoot-ports`. Every *recommend* and *maybe* item below was built
+> (the 3 "NOT recommended" items were skipped). Schema:
+> `migrations/006_spiderfoot_layer.sql` — **not yet applied**, run
+> `npm run db:migrate`. Backend/API + scheduler are wired and tested (201 tests,
+> tsc clean); the React console UI does not yet surface the new endpoints.
+
 A senior-engineer brief on what's worth lifting from SpiderFoot (Python, MIT v4.0)
 into samaritan-feeder (TS/Hono, MIT). Decision-ready, grounded in a multi-agent
 cross-analysis of both codebases (SpiderFoot `spiderfoot/`, `correlations/`,
