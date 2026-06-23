@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { getDiscoverFeed } from '../processors/discoverSynth.js';
-import { listEvents, searchEvents } from '../store/events.js';
+import { listEvents, listEventsDeduped, searchEvents } from '../store/events.js';
 import { listSources } from '../store/sources.js';
 import { query } from '../db.js';
 import type { EventKind, IntelligenceEvent } from '../types.js';
@@ -146,6 +146,51 @@ app.get('/sources', async (c) => {
   } catch {
     return c.json({ sources: [] });
   }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Two-feed split (2026-06-23): the web app renders TWO distinct surfaces —
+//   • Discover  = NEWS  → GET /discover/tiles  (Perplexity-style synthesized tiles)
+//   • Events    = feed  → GET /discover/events (raw events/alerts, DEDUPED by title)
+// `/discover` (above) stays a back-compat superset so older clients + the feeder's
+// own console keep working. Both new paths live under /discover/* so samaritan-
+// server's feeder proxy forwards them unchanged.
+// ───────────────────────────────────────────────────────────────────────────
+
+// GET /discover/tiles — the NEWS feed (synthesized, news-kind events only).
+app.get('/tiles', async (c) => {
+  const limit = clampLimit(c.req.query('limit'), 50, 50);
+  try {
+    const feed = await getDiscoverFeed();
+    return c.json({
+      tiles: feed.tiles.slice(0, limit),
+      eventsConsidered: feed.eventsConsidered,
+      lastRefresh: feed.lastRefresh,
+      model: feed.model,
+    });
+  } catch {
+    return c.json({ tiles: [], eventsConsidered: 0, lastRefresh: 0, model: '' });
+  }
+});
+
+// GET /discover/events — the Events feed (events/alerts), DEDUPED by title so an
+// over-producing source can't flood it. Same filters as the SPA's feed UI.
+app.get('/events', async (c) => {
+  const q = c.req.query('q')?.trim() || undefined;
+  const sourceId = c.req.query('source_id') || c.req.query('sourceId') || undefined;
+  const kinds = parseKinds(c.req.query('kinds'));
+  const sinceHours = parseFloat(c.req.query('since_hours') ?? '');
+  const limit = clampLimit(c.req.query('limit'), 150, 500);
+  const since = Number.isFinite(sinceHours) && sinceHours > 0 ? Date.now() - sinceHours * 3_600_000 : undefined;
+
+  let events: IntelligenceEvent[] = [];
+  try {
+    events = await listEventsDeduped({ query: q, sourceId, kinds, since, limit });
+  } catch {
+    events = [];
+  }
+  const clientEvents = events.map(toClientEvent);
+  return c.json({ events: clientEvents, count: clientEvents.length });
 });
 
 export default app;
