@@ -1,22 +1,22 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { getAllWebcams, getCategories, getWebcamsByCategory, searchWebcamsNear, searchWebcamsByName, getWebcamsInBounds, getMetadata } from '../geo/webcamLibrary.js';
+import { getAllWebcams, getCategories, getWebcamsByCategory, searchWebcamsNear, searchWebcamsByName, getWebcamsInBounds, getMetadata, getWebcamsByNames } from '../geo/webcamLibrary.js';
 import { parseLocation } from '../geo/utils.js';
 import { createSource } from '../store/sources.js';
 import { importOpenTrafficCamMap } from '../geo/openTrafficCamMap.js';
 
 const app = new Hono();
 
-// In-memory JSON cache for immutable full-list responses
-let cachedWebcamsJson: string | undefined;
+// Categories metadata only (a few KB). The full webcam list is intentionally NOT
+// cached server-side — it was a retained ~97MB string pinned for the process life.
 let cachedCategoriesJson: string | undefined;
 
 app.get('/', async (c) => {
   if (!cachedCategoriesJson) {
     cachedCategoriesJson = JSON.stringify({
-      metadata: getMetadata(),
-      categories: getCategories(),
+      metadata: await getMetadata(),
+      categories: await getCategories(),
     });
   }
   return c.newResponse(cachedCategoriesJson, 200, {
@@ -35,16 +35,16 @@ app.get('/webcams', async (c) => {
   if (near) {
     const point = parseLocation(near);
     if (!point) return c.json({ error: 'Invalid near format. Use lat,lon' }, 400);
-    const results = searchWebcamsNear(point, radius);
+    const results = await searchWebcamsNear(point, radius);
     return c.json({ webcams: results });
   }
 
   if (query) {
-    return c.json({ webcams: searchWebcamsByName(query) });
+    return c.json({ webcams: await searchWebcamsByName(query) });
   }
 
   if (category) {
-    return c.json({ webcams: getWebcamsByCategory(category) });
+    return c.json({ webcams: await getWebcamsByCategory(category) });
   }
 
   if (bounds) {
@@ -52,16 +52,11 @@ app.get('/webcams', async (c) => {
     if ([minLat, minLon, maxLat, maxLon].some((n) => Number.isNaN(n))) {
       return c.json({ error: 'Invalid bounds. Use minLat,minLon,maxLat,maxLon' }, 400);
     }
-    return c.json({ webcams: getWebcamsInBounds(minLat, minLon, maxLat, maxLon) });
+    return c.json({ webcams: await getWebcamsInBounds(minLat, minLon, maxLat, maxLon) });
   }
 
-  if (!cachedWebcamsJson) {
-    cachedWebcamsJson = JSON.stringify({ webcams: getAllWebcams() });
-  }
-  return c.newResponse(cachedWebcamsJson, 200, {
-    'Content-Type': 'application/json',
-    'Cache-Control': 'public, max-age=3600',
-  });
+  // Built on demand (capped in the DB layer). Clients/CDN still cache via the header.
+  return c.json({ webcams: await getAllWebcams() }, 200, { 'Cache-Control': 'public, max-age=3600' });
 });
 
 app.post('/import', async (c) => {
@@ -76,8 +71,7 @@ app.post('/import', async (c) => {
     return c.json({ error: 'Validation failed', issues: parsed.error.issues }, 400);
   }
 
-  const all = getAllWebcams();
-  const toImport = all.filter((w) => parsed.data.names.includes(w.name));
+  const toImport = await getWebcamsByNames(parsed.data.names);
   const imported: Array<{ name: string; id: string }> = [];
   const failed: Array<{ name: string; reason: string }> = [];
 

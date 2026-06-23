@@ -6,9 +6,11 @@ COPY . .
 # Transpile only: --noCheck + no declaration emit avoids tsc OOMing while
 # inferring/emitting a type for the 67MB src/data/webcam-library.json import.
 RUN NODE_OPTIONS=--max-old-space-size=8192 npm run build -- --noCheck --declaration false --declarationMap false
-# tsc does not copy .json assets; the runtime imports these three from dist/data.
+# tsc does not copy .json assets; the runtime imports country-bboxes.json from
+# dist/data. (The webcam/ip-camera libraries are no longer imported — cameras are
+# served from the public.cameras PostGIS table via src/geo/cameraStore.ts.)
 RUN mkdir -p dist/data \
- && cp src/data/country-bboxes.json src/data/ip-camera-library.json src/data/webcam-library.json dist/data/
+ && cp src/data/country-bboxes.json dist/data/
 # Build the operator console (web/) -> web/dist, served statically by the feeder at /.
 RUN cd web && npm ci && npm run build
 

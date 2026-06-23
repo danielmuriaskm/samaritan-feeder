@@ -9,20 +9,22 @@ import {
   searchIpCamerasByName,
   getIpCamerasInBounds,
   getIpCameraMetadata,
+  getIpCamerasByNames,
 } from '../geo/ipCameraLibrary.js';
 import { parseLocation } from '../geo/utils.js';
 import { createSource } from '../store/sources.js';
 
 const app = new Hono();
 
-let cachedCamerasJson: string | undefined;
+// Categories metadata only (a few KB). The full camera list is NOT cached server-side
+// (it was a retained multi-MB string); built on demand below.
 let cachedCategoriesJson: string | undefined;
 
 app.get('/', async (c) => {
   if (!cachedCategoriesJson) {
     cachedCategoriesJson = JSON.stringify({
-      metadata: getIpCameraMetadata(),
-      categories: getIpCameraCategories(),
+      metadata: await getIpCameraMetadata(),
+      categories: await getIpCameraCategories(),
     });
   }
   return c.newResponse(cachedCategoriesJson, 200, {
@@ -41,16 +43,16 @@ app.get('/cameras', async (c) => {
   if (near) {
     const point = parseLocation(near);
     if (!point) return c.json({ error: 'Invalid near format. Use lat,lon' }, 400);
-    const results = searchIpCamerasNear(point, radius);
+    const results = await searchIpCamerasNear(point, radius);
     return c.json({ cameras: results });
   }
 
   if (query) {
-    return c.json({ cameras: searchIpCamerasByName(query) });
+    return c.json({ cameras: await searchIpCamerasByName(query) });
   }
 
   if (category) {
-    return c.json({ cameras: getIpCamerasByCategory(category) });
+    return c.json({ cameras: await getIpCamerasByCategory(category) });
   }
 
   if (bounds) {
@@ -58,16 +60,11 @@ app.get('/cameras', async (c) => {
     if ([minLat, minLon, maxLat, maxLon].some((n) => Number.isNaN(n))) {
       return c.json({ error: 'Invalid bounds. Use minLat,minLon,maxLat,maxLon' }, 400);
     }
-    return c.json({ cameras: getIpCamerasInBounds(minLat, minLon, maxLat, maxLon) });
+    return c.json({ cameras: await getIpCamerasInBounds(minLat, minLon, maxLat, maxLon) });
   }
 
-  if (!cachedCamerasJson) {
-    cachedCamerasJson = JSON.stringify({ cameras: getAllIpCameras() });
-  }
-  return c.newResponse(cachedCamerasJson, 200, {
-    'Content-Type': 'application/json',
-    'Cache-Control': 'public, max-age=3600',
-  });
+  // Built on demand (capped in the DB layer). Clients/CDN still cache via the header.
+  return c.json({ cameras: await getAllIpCameras() }, 200, { 'Cache-Control': 'public, max-age=3600' });
 });
 
 app.post('/import', async (c) => {
@@ -82,8 +79,7 @@ app.post('/import', async (c) => {
     return c.json({ error: 'Validation failed', issues: parsed.error.issues }, 400);
   }
 
-  const all = getAllIpCameras();
-  const toImport = all.filter((w) => parsed.data.names.includes(w.name));
+  const toImport = await getIpCamerasByNames(parsed.data.names);
   const imported: Array<{ name: string; id: string }> = [];
   const failed: Array<{ name: string; reason: string }> = [];
 

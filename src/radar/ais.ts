@@ -249,3 +249,14 @@ export function getShipsInBbox(bbox: Bbox): Ship[] {
   }
   return out;
 }
+
+/**
+ * Single-ship lookup by id (the AIS snapshot key) — backs the /radar/ships/:id
+ * detail panel. Reads the in-memory snapshot; null when not currently tracked.
+ */
+export function getShipById(id: string): Ship | null {
+  if (!ensureStarted()) return null;
+  const s = snapshot.get(id);
+  if (!s || !Number.isFinite(s.lat) || !Number.isFinite(s.lon)) return null;
+  return { id: s.id, lat: s.lat, lon: s.lon, heading: s.heading, speed: s.speed, name: s.name, type: s.type };
+}

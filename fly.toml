@@ -24,5 +24,9 @@ primary_region = "lhr"  # London — co-located with samaritan-server (lhr) + EU
     path = "/health"
 
 [[vm]]
-  size = "shared-cpu-2x"
-  memory = "2gb"
+  # Downsized 2026-06-22 from shared-cpu-2x/2gb: the webcam/ip-camera JSON libraries
+  # were moved out of heap to the public.cameras PostGIS table (cameraStore.ts), so
+  # steady-state RSS is ~100MB. NOTE: keep in sync with the live machine — `fly scale
+  # vm/memory` does NOT write back here, and a deploy re-applies whatever this says.
+  size = "shared-cpu-1x"
+  memory = "512mb"
