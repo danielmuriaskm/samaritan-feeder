@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { parseUsgs, magnitudeConfidence, type MakeEvent } from './usgs.js';
 import { parseEonet } from './eonet.js';
 import { parseGdacs, alertLevelConfidence } from './gdacs.js';
-import { parseNws, severityConfidence } from './nws.js';
+import { parseNws, severityConfidence, formatNwsTitle, eventList } from './nws.js';
 
 /**
  * Stub mirroring BaseAdapter#makeEvent: fills defaults so the parsers can be
@@ -252,4 +252,52 @@ test('severityConfidence orders extreme > severe > moderate > minor', () => {
   assert.ok(severityConfidence('Extreme') > severityConfidence('Severe'));
   assert.ok(severityConfidence('Severe') > severityConfidence('Moderate'));
   assert.ok(severityConfidence('Moderate') > severityConfidence('Minor'));
+});
+
+test('parseNws events filter scopes the feed to the configured event type(s)', () => {
+  // A national feed with mixed event types — what the "Tornado Warnings" source
+  // actually received before config.event was honored.
+  const payload = {
+    features: [
+      { properties: { id: '1', event: 'Tornado Warning', severity: 'Extreme', messageType: 'Alert' } },
+      { properties: { id: '2', event: 'Severe Thunderstorm Warning', severity: 'Severe', messageType: 'Alert' } },
+      { properties: { id: '3', event: 'Special Weather Statement', severity: 'Moderate', messageType: 'Alert' } },
+      { properties: { id: '4', event: 'Tornado Warning', severity: 'Severe', messageType: 'Alert' } },
+    ],
+  };
+  const all = parseNws(payload, { sourceId: 's', makeEvent });
+  assert.equal(all.length, 4); // no filter => everything
+
+  const tornado = parseNws(payload, { sourceId: 's', events: ['Tornado Warning'], makeEvent });
+  assert.deepEqual(tornado.map((e) => e.tags?.nws_id).sort(), ['1', '4']);
+
+  // Case-insensitive matching so a slightly off-case config value still scopes.
+  const ci = parseNws(payload, { sourceId: 's', events: ['tornado warning'], makeEvent });
+  assert.equal(ci.length, 2);
+});
+
+test('parseNws max caps the number of emitted events', () => {
+  const payload = {
+    features: Array.from({ length: 10 }, (_, i) => ({
+      properties: { id: `e${i}`, event: 'Flood Warning', severity: 'Severe', messageType: 'Alert' },
+    })),
+  };
+  assert.equal(parseNws(payload, { sourceId: 's', max: 3, makeEvent }).length, 3);
+});
+
+test('formatNwsTitle does not double-print the severity word', () => {
+  // NWS event names already lead with the severity word.
+  assert.equal(formatNwsTitle('Severe', 'Severe Thunderstorm Warning'), 'NWS Severe Thunderstorm Warning');
+  assert.equal(formatNwsTitle('Extreme', 'Extreme Heat Warning'), 'NWS Extreme Heat Warning');
+  // When it does not, the severity is still prepended for context.
+  assert.equal(formatNwsTitle('Moderate', 'Special Weather Statement'), 'NWS Moderate Special Weather Statement');
+  assert.equal(formatNwsTitle('Severe', 'Tornado Warning'), 'NWS Severe Tornado Warning');
+  assert.equal(formatNwsTitle(undefined, 'Flood Warning'), 'NWS Flood Warning');
+});
+
+test('eventList coerces string | string[] | undefined', () => {
+  assert.deepEqual(eventList('Tornado Warning'), ['Tornado Warning']);
+  assert.deepEqual(eventList(['Tornado Warning', ' Flood Warning ']), ['Tornado Warning', 'Flood Warning']);
+  assert.deepEqual(eventList(undefined), []);
+  assert.deepEqual(eventList(['', '  ']), []);
 });

@@ -128,6 +128,12 @@ export async function listTopEvents(opts: {
   since?: number;
   kinds?: EventKind[];
   sourceId?: string;
+  /** Restrict to events whose SOURCE kind is in this set (joins
+   *  intelligence_sources). Used by the news feed to include only news sources
+   *  (hn/rss/social/…) and exclude alert/intel sources (nws/usgs/nvd/…), which
+   *  otherwise dominate by volume + confidence and make Discover look like the
+   *  Events feed. */
+  sourceKinds?: string[];
   minScore?: number;
   limit?: number;
 }): Promise<IntelligenceEvent[]> {
@@ -135,15 +141,18 @@ export async function listTopEvents(opts: {
   const params: unknown[] = [];
   let idx = 1;
 
-  if (opts.since) { conditions.push(`event_at >= $${idx++}`); params.push(opts.since); }
-  if (opts.kinds?.length) { conditions.push(`kind = ANY($${idx++}::text[])`); params.push(opts.kinds); }
-  if (opts.sourceId) { conditions.push(`source_id = $${idx++}`); params.push(opts.sourceId); }
-  if (typeof opts.minScore === 'number') { conditions.push(`COALESCE(score, confidence) >= $${idx++}`); params.push(opts.minScore); }
+  // Columns qualified `e.` because the optional sources join also has a `kind`.
+  if (opts.since) { conditions.push(`e.event_at >= $${idx++}`); params.push(opts.since); }
+  if (opts.kinds?.length) { conditions.push(`e.kind = ANY($${idx++}::text[])`); params.push(opts.kinds); }
+  if (opts.sourceId) { conditions.push(`e.source_id = $${idx++}`); params.push(opts.sourceId); }
+  if (opts.sourceKinds?.length) { conditions.push(`s.kind = ANY($${idx++}::text[])`); params.push(opts.sourceKinds); }
+  if (typeof opts.minScore === 'number') { conditions.push(`COALESCE(e.score, e.confidence) >= $${idx++}`); params.push(opts.minScore); }
 
+  const join = opts.sourceKinds?.length ? `JOIN intelligence_sources s ON s.id = e.source_id` : '';
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const rows = await query<Record<string, unknown>>(
-    `SELECT * FROM intelligence_events ${where}
-     ORDER BY COALESCE(score, confidence) DESC, event_at DESC LIMIT $${idx++}`,
+    `SELECT e.* FROM intelligence_events e ${join} ${where}
+     ORDER BY COALESCE(e.score, e.confidence) DESC, e.event_at DESC LIMIT $${idx++}`,
     [...params, opts.limit ?? 20],
   );
   return rows.map(fromRow);

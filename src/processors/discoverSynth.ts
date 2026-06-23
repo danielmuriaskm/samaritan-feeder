@@ -1,6 +1,6 @@
-import type { EventKind, IntelligenceEvent } from '../types.js';
+import type { IntelligenceEvent } from '../types.js';
 import { config } from '../config.js';
-import { callSamaritanLLM } from '../samaritan-client.js';
+import { callDirectLLM } from './text.js';
 import { sanitizeForPrompt, wrapUntrusted } from '../llm/sanitize.js';
 import { listTopEvents } from '../store/events.js';
 import { createHash } from 'crypto';
@@ -28,13 +28,17 @@ import { createHash } from 'crypto';
 // ---------------------------------------------------------------------------
 
 /**
- * Discover is the NEWS feed (Perplexity-style). It is built only from news-ish
- * event kinds — articles, posts, trends, visuals — and deliberately EXCLUDES
- * `alert`/`anomaly`/`detection`, which belong to the separate Events feed
- * (/discover/events). This keeps the synthesized tiles "mostly news" instead of a
- * wall of NWS weather alerts (which dominate raw event volume).
+ * Discover is the NEWS feed (Perplexity-style). It is built only from NEWS-type
+ * SOURCES — Hacker News, RSS, social, arXiv, GitHub, … — and deliberately excludes
+ * alert/intel sources (nws/usgs/gdacs/nvd/shodan/…), which belong to the separate
+ * Events feed (/discover/events). Source-kind is the right discriminator: NWS
+ * "Marine Weather Statement" rows are stored as kind=`text` (not `alert`) yet are
+ * clearly not news, so filtering by event kind alone let them flood the feed.
  */
-const NEWS_KINDS: EventKind[] = ['text', 'social_post', 'trend', 'visual'];
+const NEWS_SOURCE_KINDS: string[] = [
+  'hn', 'rss', 'reddit', 'bluesky', 'mastodon', 'twitter', 'tiktok', 'youtube',
+  'instagram', 'telegram', 'arxiv', 'github', 'gdelt', 'news_api',
+];
 
 /** Look-back window for events that can feed the feed. */
 const WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -141,12 +145,23 @@ function modelLabel(): string {
  * `MAX_TILES` LLM calls.
  */
 async function synthesizeFeed(now: number): Promise<DiscoverFeed> {
-  const events = await listTopEvents({
-    since: now - WINDOW_MS,
-    kinds: NEWS_KINDS,
+  const since = now - WINDOW_MS;
+  let events = await listTopEvents({
+    since,
+    sourceKinds: NEWS_SOURCE_KINDS,
     minScore: MIN_SCORE,
     limit: FETCH_LIMIT,
   });
+
+  // The composite importance score is tuned for alert prioritization and
+  // systematically under-scores NEWS sources (HN/RSS/social top out around 0.4),
+  // so the MIN_SCORE gate can starve the news feed at a quiet hour and leave
+  // Discover near-empty. When too few events clear the gate, fall back to the best
+  // available recent news regardless of score — the feed is never empty while
+  // there is news in the window. (No-op when the gate already yields enough.)
+  if (events.length < MIN_TILES) {
+    events = await listTopEvents({ since, sourceKinds: NEWS_SOURCE_KINDS, limit: FETCH_LIMIT });
+  }
 
   if (events.length === 0) {
     return { tiles: [], eventsConsidered: 0, lastRefresh: now, model: modelLabel() };
@@ -419,18 +434,14 @@ function buildTilePrompt(events: IntelligenceEvent[]): { system: string; user: s
   return { system, user };
 }
 
-/** Single LLM round-trip via the shared Samaritan chat client; parsed or null. */
+/** Single LLM round-trip via the feeder's DIRECT OpenAI-compatible client
+ *  (LLM_BASE_URL + key rotation, same path event enrichment uses). Parsed or
+ *  null. Previously this called samaritan-server's /internal/ai/chat, which
+ *  doesn't exist → every tile fell back to a deterministic restatement of one
+ *  event, making Discover look identical to the raw Events feed. */
 async function tryLLMTile(events: IntelligenceEvent[]): Promise<DraftTile | null> {
   const { system, user } = buildTilePrompt(events);
-  const res = await callSamaritanLLM({
-    model: modelLabel(),
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    temperature: 0.2,
-    max_tokens: 320,
-  });
+  const res = await callDirectLLM(system, user);
   const content = res?.choices?.[0]?.message?.content;
   if (!content) return null;
   return parseDraft(content);

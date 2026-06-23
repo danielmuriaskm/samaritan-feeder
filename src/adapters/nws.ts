@@ -124,6 +124,27 @@ function compositeNwsId(p: NwsAlertProps, eventName: string, area: string): stri
 }
 
 /**
+ * Build the display title without the "Severe Severe Thunderstorm Warning"
+ * redundancy: NWS event names like "Severe Thunderstorm Warning" / "Extreme Heat
+ * Warning" already lead with the CAP severity word, so prepending the severity
+ * again double-prints it. Only prepend the severity when the event name does NOT
+ * already start with it.
+ */
+export function formatNwsTitle(severity: string | null | undefined, eventName: string): string {
+  const sev = String(severity ?? '').trim();
+  const ev = String(eventName ?? '').trim();
+  const prefix = sev && !ev.toLowerCase().startsWith(sev.toLowerCase()) ? `${sev} ` : '';
+  return `NWS ${prefix}${ev}`.replace(/\s+/g, ' ').trim();
+}
+
+/** Coerce a config `event` value (string | string[] | undefined) to a list of
+ * trimmed, non-empty event names. */
+export function eventList(raw: unknown): string[] {
+  const arr = Array.isArray(raw) ? raw : raw === undefined || raw === null ? [] : [raw];
+  return arr.map((e) => String(e).trim()).filter(Boolean);
+}
+
+/**
  * Pure parser: NWS alerts payload -> RawEvent[]. Exported for unit testing
  * without network. `minSeverity` (minor<moderate<severe<extreme) filters out
  * lower-severity alerts; cancellations are skipped.
@@ -133,6 +154,10 @@ export function parseNws(
   opts: {
     sourceId: string;
     minSeverity?: 'minor' | 'moderate' | 'severe' | 'extreme';
+    /** Keep only alerts whose CAP `event` name matches one of these (case-insensitive).
+     * Empty/omitted = keep all event types. This is what scopes the "Tornado Warnings"
+     * feed to actual tornado warnings instead of the whole national alert stream. */
+    events?: string[];
     max?: number;
     makeEvent: MakeEvent;
   },
@@ -141,11 +166,12 @@ export function parseNws(
   const max = opts.max ?? MAX_EVENTS;
   const rank: Record<string, number> = { minor: 0, moderate: 1, severe: 2, extreme: 3 };
   const minRank = opts.minSeverity ? rank[opts.minSeverity] : -1;
+  const eventFilter = (opts.events ?? []).map((e) => e.toLowerCase());
   const list = Array.isArray(payload.features) ? payload.features : [];
-  const events: RawEvent[] = [];
+  const out: RawEvent[] = [];
 
   for (const f of list) {
-    if (events.length >= max) break;
+    if (out.length >= max) break;
     const p = f.properties ?? {};
     // Skip cancellations — they retract, not add, intelligence.
     if (String(p.messageType ?? '').toLowerCase() === 'cancel') continue;
@@ -154,6 +180,9 @@ export function parseNws(
     if (minRank >= 0 && (rank[sev] ?? -1) < minRank) continue;
 
     const eventName = p.event ?? 'Weather Alert';
+    // Scope to the configured event type(s). Authoritative client-side guard even
+    // when the upstream `event=` query param already narrows the payload.
+    if (eventFilter.length > 0 && !eventFilter.includes(eventName.toLowerCase())) continue;
     const area = p.areaDesc ?? 'unspecified area';
     const eventAt = parseIso(p.onset) ?? parseIso(p.effective) ?? parseIso(p.sent) ?? Date.now();
     // STABLE dedupe id. Prefer the CAP id/identifier (globally unique at NWS), then
@@ -175,11 +204,11 @@ export function parseNws(
       p.instruction ? `Instruction: ${p.instruction}` : '',
     ].filter(Boolean);
 
-    events.push(
+    out.push(
       makeEvent(
         {
           kind: severityKind(p.severity),
-          title: `NWS ${p.severity ?? ''} ${eventName}`.replace(/\s+/g, ' ').trim(),
+          title: formatNwsTitle(p.severity, eventName),
           content: contentLines.join('\n'),
           eventAt,
           confidence: severityConfidence(p.severity),
@@ -202,7 +231,7 @@ export function parseNws(
     );
   }
 
-  return events;
+  return out;
 }
 
 export class NwsAdapter extends BaseAdapter {
@@ -220,6 +249,12 @@ export class NwsAdapter extends BaseAdapter {
     if (config.area !== undefined && !/^[A-Z]{2}$/.test(String(config.area))) {
       errors.push('area must be a 2-letter state/marine code (e.g. "CA")');
     }
+    if (
+      config.event !== undefined &&
+      !(typeof config.event === 'string' || (Array.isArray(config.event) && config.event.every((e) => typeof e === 'string')))
+    ) {
+      errors.push('event must be a string or array of strings (NWS event names, e.g. "Tornado Warning")');
+    }
     return { valid: errors.length === 0, errors };
   }
 
@@ -230,14 +265,25 @@ export class NwsAdapter extends BaseAdapter {
         ? minSeverityRaw
         : undefined;
     const sourceId = String(config.sourceId ?? 'nws');
+    // Event-type scope (e.g. ["Tornado Warning"]). Without this, a feed named
+    // "Tornado Warnings" silently ingested the ENTIRE national alert stream.
+    const events = eventList(config.event);
+    const max = typeof config.limit === 'number' && config.limit > 0 ? config.limit : undefined;
 
     const url = new URL(ALERTS_URL);
     url.searchParams.set('status', 'actual');
     if (typeof config.area === 'string' && /^[A-Z]{2}$/.test(config.area)) {
       url.searchParams.set('area', config.area);
     }
-    // Default to severe+ unless the operator asks for more, to keep noise down.
-    if (!minSeverity && config.area === undefined) {
+    // Narrow server-side by event name (NWS supports repeated `event` params). The
+    // parser still filters defensively, so an unsupported value can't widen scope.
+    for (const ev of events) {
+      url.searchParams.append('event', ev);
+    }
+    // Default to severe+ to keep noise down, unless the operator already scoped the
+    // feed by event type, severity, or area. NB: NWS rejects a `limit` query param
+    // (HTTP 400) — capping is done client-side via `max`, never on the URL.
+    if (events.length === 0 && !minSeverity && config.area === undefined) {
       url.searchParams.set('severity', 'Severe,Extreme');
     }
 
@@ -253,7 +299,7 @@ export class NwsAdapter extends BaseAdapter {
     }
 
     const payload = (await res.json()) as NwsPayload;
-    return parseNws(payload, { sourceId, minSeverity, makeEvent: this.makeEvent.bind(this) });
+    return parseNws(payload, { sourceId, minSeverity, events, max, makeEvent: this.makeEvent.bind(this) });
   }
 
   async health(): Promise<{ healthy: boolean; latencyMs: number }> {
