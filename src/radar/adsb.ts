@@ -122,6 +122,32 @@ function normalize(ac: Record<string, unknown>): Aircraft | null {
 }
 
 /**
+ * Single-aircraft lookup by ICAO24 hex — backs the /radar/aircraft/:id detail
+ * panel. Hits adsb.lol's /v2/icao/<hex> endpoint (key-free). Returns null when the
+ * id isn't a hex or the aircraft isn't currently transmitting.
+ */
+export async function getAircraftById(icao: string): Promise<Aircraft | null> {
+  const hex = icao.trim().toLowerCase();
+  if (!/^[0-9a-f]{6}$/.test(hex)) return null;
+  try {
+    const res = await safeFetch(`${ADSB_BASE}/icao/${hex}`, {
+      headers: { Accept: 'application/json', 'User-Agent': 'Samaritan-Feeder/0.1' },
+      timeoutMs: 12_000,
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { ac?: unknown };
+    const list = Array.isArray(body.ac) ? body.ac : [];
+    for (const a of list) {
+      const norm = normalize(a as Record<string, unknown>);
+      if (norm) return norm;
+    }
+  } catch {
+    // best-effort radar — fall through to null on network / parse failure.
+  }
+  return null;
+}
+
+/**
  * Fetch live aircraft whose current position falls inside the bbox.
  * Cached ~10s per (rounded) query to spare the free endpoint during map panning.
  */

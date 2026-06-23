@@ -156,3 +156,21 @@ export async function countCameras(bbox?: {
   const rows = await query<{ n: string }>(`select count(*)::int as n from public.cameras c where ${LIVE}`);
   return Number(rows[0]?.n ?? 0);
 }
+
+/** Live cameras grouped by country, most first. Feeds the radar /cameras/count
+ * `byCountry` rollup the SPA's diagnostic pill reads. */
+export async function cameraCountriesLive(): Promise<Array<{ country: string; count: number }>> {
+  const rows = await query<{ country: string; count: string }>(
+    `select c.country, count(*)::int as count from public.cameras c where ${LIVE} group by c.country order by count desc`,
+  );
+  return rows.map((r) => ({ country: r.country, count: Number(r.count) }));
+}
+
+/** Live cameras grouped by category, most first → radar /cameras/count `byCategory`
+ * (keyed `key` to match the SPA's `{ key, count }` shape). */
+export async function cameraCategoriesLive(): Promise<Array<{ key: string; count: number }>> {
+  const rows = await query<{ category: string; count: string }>(
+    `select c.category, count(*)::int as count from public.cameras c where ${LIVE} group by c.category order by count desc`,
+  );
+  return rows.map((r) => ({ key: r.category, count: Number(r.count) }));
+}
