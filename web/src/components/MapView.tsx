@@ -1586,9 +1586,11 @@ export default function MapView() {
       {/* Map */}
       <div style={{ flex: 1, position: 'relative' }}>
         <MapContainer center={[25, 10]} zoom={2} style={{ height: '100%', width: '100%' }} minZoom={2} worldCopyJump>
+          {/* OpenStreetMap tiles, matching the radar map in the Samaritan web UI
+              (apps/web/src/routes/Radar.tsx) — standard OSM, not the dark CARTO basemap. */}
           <TileLayer
-            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           <MapBoundsListener onChange={(bounds, zoom) => { setBoundsStr(bounds); setMapZoom(zoom); }} />
           <MarkerClusterLayer cameras={filtered} onCameraClick={setSelectedCamera} />
