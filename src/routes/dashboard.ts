@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { listSources } from '../store/sources.js';
 import { listEvents, searchEvents } from '../store/events.js';
+import { riskMatrix, RISK_BAND_ORDER } from '../scoring/severity.js';
 import { query, one } from '../db.js';
 
 const app = new Hono();
@@ -21,6 +22,13 @@ app.get('/', async (c) => {
     acc[e.kind] = (acc[e.kind] ?? 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+
+  // Risk matrix: how many of the last-24h events fall in each derived risk band
+  // (HIGH/MEDIUM/LOW/INFO). Reuses the already-fetched eventsLastDay set — no extra
+  // query — and bands them via the shared deriveRiskBand thresholds. Falls back to
+  // `confidence` for rows not yet composite-scored, matching the read path's COALESCE.
+  const riskMatrixCounts = riskMatrix(eventsLastDay.map((e) => e.score ?? e.confidence));
+  const riskMatrixBands = RISK_BAND_ORDER.map((band) => ({ band, count: riskMatrixCounts[band] }));
 
   const sourceBreakdown = eventsLastDay.reduce((acc, e) => {
     acc[e.sourceId] = (acc[e.sourceId] ?? 0) + 1;
@@ -90,6 +98,11 @@ app.get('/', async (c) => {
       lastDay: eventsLastDay.length,
       lastWeek: eventsLastWeek.length,
       kindBreakdown,
+      riskMatrix: {
+        window: 'lastDay',
+        counts: riskMatrixCounts,
+        bands: riskMatrixBands,
+      },
       topSources: Object.entries(sourceBreakdown)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 10)

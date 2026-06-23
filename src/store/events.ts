@@ -1,7 +1,86 @@
-import { query, one, exec } from '../db.js';
+import { query, one, exec, transact } from '../db.js';
 import type { EventKind, IntelligenceEvent, RiskBand, DataClass } from '../types.js';
 import { deriveDataClass } from '../lib/dataClass.js';
 import { createHash } from 'crypto';
+
+// ---------------------------------------------------------------------------
+// Search query grammar (006). Free-text search supports three modes via a tiny
+// prefix/affix grammar so the feed UI can offer contains / wildcard / regex
+// without separate params:
+//   - bare text         => 'contains'  : current ILIKE %q% behaviour
+//   - *term*            => 'wildcard'  : caller's * become SQL ILIKE %, with any
+//                                        literal % / _ in the input escaped
+//   - /pattern/         => 'regex'     : Postgres case-insensitive `~*`
+// Input is capped at MAX_QUERY_LEN to bound both the ILIKE scan and (critically)
+// the regex engine's exposure to a runaway/ReDoS-style pattern.
+// ---------------------------------------------------------------------------
+
+export const MAX_QUERY_LEN = 200;
+
+export interface ParsedQuery {
+  mode: 'contains' | 'wildcard' | 'regex';
+  /** The pattern to bind for the chosen mode: an ILIKE pattern (contains/wildcard)
+   *  or a raw regex source (regex). */
+  pattern: string;
+}
+
+/** Escape the SQL LIKE/ILIKE metacharacters % and _ (and the default escape \\)
+ *  so user text matches literally. */
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * Parse a free-text search string into a search mode + bound pattern. Pure; does
+ * no DB work. Over-long input is truncated to MAX_QUERY_LEN before parsing so the
+ * affix detection still sees a well-formed `*...*` / `/.../` even after the cap.
+ */
+export function parseQueryMode(q: string): ParsedQuery {
+  const s = (q ?? '').slice(0, MAX_QUERY_LEN).trim();
+
+  // /pattern/ => regex. Require a non-empty body between the slashes.
+  if (s.length >= 2 && s.startsWith('/') && s.endsWith('/')) {
+    const body = s.slice(1, -1);
+    if (body.length) return { mode: 'regex', pattern: body };
+  }
+
+  // *term* => wildcard. Translate the caller's * to ILIKE %, escaping any literal
+  // LIKE metacharacters in the surrounding text first.
+  if (s.length >= 2 && s.startsWith('*') && s.endsWith('*')) {
+    const body = s.slice(1, -1);
+    if (body.length) {
+      const pattern = `%${body.split('*').map(escapeLike).join('%')}%`;
+      return { mode: 'wildcard', pattern };
+    }
+  }
+
+  // bare text => contains (literal substring ILIKE).
+  return { mode: 'contains', pattern: `%${escapeLike(s)}%` };
+}
+
+/**
+ * Run a regex-mode search (Postgres `~*`) under a tight per-statement timeout so a
+ * pathological pattern can't pin a backend. Runs inside a transaction with
+ * `SET LOCAL statement_timeout` (scoped to this txn only). Degrades to [] on an
+ * invalid regex (22023/2201B) or a timeout (57014) instead of surfacing a 500.
+ */
+async function runRegexSearch(
+  sql: string,
+  params: unknown[],
+): Promise<Record<string, unknown>[]> {
+  try {
+    return await transact(async (client) => {
+      await client.query(`SET LOCAL statement_timeout = '3000ms'`);
+      const result = await client.query<Record<string, unknown>>(sql, params);
+      return result.rows;
+    });
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    // 57014 statement_timeout; 2201B invalid_regular_expression; 22023 invalid_parameter_value.
+    if (code === '57014' || code === '2201B' || code === '22023') return [];
+    throw err;
+  }
+}
 
 export async function listEvents(opts: {
   sourceId?: string;
@@ -57,20 +136,30 @@ export async function listEventsDeduped(opts: {
   sourceId?: string;
   kinds?: EventKind[];
   since?: number;
+  dataClass?: DataClass;
+  riskBand?: RiskBand;
+  minScore?: number;
   limit?: number;
 }): Promise<IntelligenceEvent[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   let idx = 1;
 
+  let isRegex = false;
   if (opts.query) {
-    conditions.push(`(content ILIKE $${idx} OR title ILIKE $${idx})`);
-    params.push(`%${opts.query}%`);
+    const parsed = parseQueryMode(opts.query);
+    const op = parsed.mode === 'regex' ? '~*' : 'ILIKE';
+    isRegex = parsed.mode === 'regex';
+    conditions.push(`(content ${op} $${idx} OR title ${op} $${idx})`);
+    params.push(parsed.pattern);
     idx++;
   }
   if (opts.sourceId) { conditions.push(`source_id = $${idx++}`); params.push(opts.sourceId); }
   if (opts.kinds?.length) { conditions.push(`kind = ANY($${idx++}::text[])`); params.push(opts.kinds); }
   if (opts.since) { conditions.push(`event_at >= $${idx++}`); params.push(opts.since); }
+  if (opts.dataClass) { conditions.push(`data_class = $${idx++}`); params.push(opts.dataClass); }
+  if (opts.riskBand) { conditions.push(`risk_band = $${idx++}`); params.push(opts.riskBand); }
+  if (typeof opts.minScore === 'number') { conditions.push(`COALESCE(score, confidence) >= $${idx++}`); params.push(opts.minScore); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit = typeof opts.limit === 'number' ? Math.min(Math.max(1, opts.limit), 500) : 150;
@@ -78,16 +167,15 @@ export async function listEventsDeduped(opts: {
   // DISTINCT ON the title key keeps the newest row per title; survivors are then
   // ordered by recency and capped. The dedupe key falls back to the id for rows
   // with no usable title so genuinely distinct untitled events are preserved.
-  const rows = await query<Record<string, unknown>>(
-    `SELECT * FROM (
+  const sql = `SELECT * FROM (
        SELECT DISTINCT ON (COALESCE(NULLIF(lower(btrim(title)), ''), id::text)) *
          FROM intelligence_events ${where}
         ORDER BY COALESCE(NULLIF(lower(btrim(title)), ''), id::text), event_at DESC
      ) d
      ORDER BY event_at DESC
-     LIMIT $${idx++}`,
-    [...params, limit],
-  );
+     LIMIT $${idx++}`;
+  const args = [...params, limit];
+  const rows = isRegex ? await runRegexSearch(sql, args) : await query<Record<string, unknown>>(sql, args);
   return rows.map(fromRow);
 }
 
@@ -102,9 +190,13 @@ export async function searchEvents(opts: {
   const params: unknown[] = [];
   let idx = 1;
 
+  let isRegex = false;
   if (opts.query) {
-    conditions.push(`(content ILIKE $${idx} OR title ILIKE $${idx})`);
-    params.push(`%${opts.query}%`);
+    const parsed = parseQueryMode(opts.query);
+    const op = parsed.mode === 'regex' ? '~*' : 'ILIKE';
+    isRegex = parsed.mode === 'regex';
+    conditions.push(`(content ${op} $${idx} OR title ${op} $${idx})`);
+    params.push(parsed.pattern);
     idx++;
   }
   if (opts.sourceId) { conditions.push(`source_id = $${idx++}`); params.push(opts.sourceId); }
@@ -113,10 +205,9 @@ export async function searchEvents(opts: {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  const rows = await query<Record<string, unknown>>(
-    `SELECT * FROM intelligence_events ${where} ORDER BY event_at DESC LIMIT $${idx++}`,
-    [...params, opts.limit ?? 20],
-  );
+  const sql = `SELECT * FROM intelligence_events ${where} ORDER BY event_at DESC LIMIT $${idx++}`;
+  const args = [...params, opts.limit ?? 20];
+  const rows = isRegex ? await runRegexSearch(sql, args) : await query<Record<string, unknown>>(sql, args);
   return rows.map(fromRow);
 }
 
@@ -136,6 +227,8 @@ export async function listTopEvents(opts: {
    *  Events feed. */
   sourceKinds?: string[];
   minScore?: number;
+  dataClass?: DataClass;
+  riskBand?: RiskBand;
   limit?: number;
 }): Promise<IntelligenceEvent[]> {
   const conditions: string[] = [];
@@ -148,6 +241,8 @@ export async function listTopEvents(opts: {
   if (opts.sourceId) { conditions.push(`e.source_id = $${idx++}`); params.push(opts.sourceId); }
   if (opts.sourceKinds?.length) { conditions.push(`s.kind = ANY($${idx++}::text[])`); params.push(opts.sourceKinds); }
   if (typeof opts.minScore === 'number') { conditions.push(`COALESCE(e.score, e.confidence) >= $${idx++}`); params.push(opts.minScore); }
+  if (opts.dataClass) { conditions.push(`e.data_class = $${idx++}`); params.push(opts.dataClass); }
+  if (opts.riskBand) { conditions.push(`e.risk_band = $${idx++}`); params.push(opts.riskBand); }
 
   const join = opts.sourceKinds?.length ? `JOIN intelligence_sources s ON s.id = e.source_id` : '';
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -446,4 +541,57 @@ function parseVector(v: unknown): number[] | undefined {
     return nums.length ? nums : undefined;
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// 006: read-path exports (CSV / NDJSON). A stable, flat column projection of an
+// IntelligenceEvent so the list route can stream events out via lib/exporters.
+// Nested location is split into lat/lon; country + cluster_id are lifted out of
+// `tags` (where adapters/correlation stamp them) so they're first-class columns.
+// ---------------------------------------------------------------------------
+
+/** Fixed column order for event CSV/NDJSON exports. */
+export const EVENT_EXPORT_COLUMNS: string[] = [
+  'id',
+  'source_id',
+  'kind',
+  'title',
+  'content',
+  'score',
+  'risk_band',
+  'data_class',
+  'confidence',
+  'event_at',
+  'lat',
+  'lon',
+  'country',
+  'cluster_id',
+];
+
+/** Flatten an IntelligenceEvent to the stable EVENT_EXPORT_COLUMNS key set. */
+export function eventToExportRow(e: IntelligenceEvent): Record<string, unknown> {
+  const tags = (e.tags ?? {}) as Record<string, unknown>;
+  const country = typeof tags.country === 'string' ? tags.country : undefined;
+  const clusterId =
+    typeof tags.cluster_id === 'string'
+      ? tags.cluster_id
+      : typeof tags.clusterId === 'string'
+        ? (tags.clusterId as string)
+        : undefined;
+  return {
+    id: e.id,
+    source_id: e.sourceId,
+    kind: e.kind,
+    title: e.title ?? '',
+    content: e.content,
+    score: e.score ?? '',
+    risk_band: e.riskBand ?? '',
+    data_class: e.dataClass ?? '',
+    confidence: e.confidence,
+    event_at: new Date(e.eventAt).toISOString(),
+    lat: e.location?.lat ?? '',
+    lon: e.location?.lon ?? '',
+    country: country ?? '',
+    cluster_id: clusterId ?? '',
+  };
 }

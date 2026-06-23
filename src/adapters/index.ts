@@ -38,6 +38,8 @@ import { ReliefWebAdapter } from './reliefweb.js';
 import { GdeltAdapter } from './gdelt.js';
 import { ArxivAdapter } from './arxiv.js';
 import { NvdAdapter } from './nvd.js';
+import { OpenphishAdapter } from './openphish.js';
+import { ZonehAdapter } from './zoneh.js';
 import type { SourceAdapter, SourceKind } from '../types.js';
 
 const registry = new Map<SourceKind, SourceAdapter>();
@@ -97,3 +99,6 @@ registerAdapter(new GdeltAdapter());
 // arXiv (Atom over the export API) + NVD CVE (JSON REST v2) — fixes the silent feeds.
 registerAdapter(new ArxivAdapter());
 registerAdapter(new NvdAdapter());
+// Phishing IOC firehoses (keyless) + Zone-H defacement RSS (SpiderFoot-inspired ports, MIT).
+registerAdapter(new OpenphishAdapter());
+registerAdapter(new ZonehAdapter());

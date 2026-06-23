@@ -93,6 +93,8 @@ const KIND_FAMILY: Partial<Record<SourceKind, SourceFamily>> = {
   stix: 'osint_cyber',
   abusech: 'osint_cyber',
   nvd: 'osint_cyber',
+  openphish: 'osint_cyber',
+  zoneh: 'osint_cyber',
   // camera / computer vision
   webcam: 'camera_cv',
   traffic_cam: 'camera_cv',
@@ -354,6 +356,163 @@ export function detectVelocitySpike(
 }
 
 // ---------------------------------------------------------------------------
+// (d) Rarity outliers: bucket recent events along an axis (source family, event
+// kind, or country) and flag buckets whose share of the total is vanishingly
+// small. The intuition: in a firehose, the *rare* category is the interesting
+// one — one phishing-feed hit among 2000 wire items is worth a look.
+//
+// Clean-room: idea inspired by SpiderFoot's analysis_outlier rarity analyzer
+// (smicallef/spiderfoot, MIT); thresholds, axes, guards and scoring are ours.
+// ---------------------------------------------------------------------------
+export type OutlierAxis = 'family' | 'kind' | 'country';
+
+export interface Outlier {
+  axis: OutlierAxis;
+  bucketKey: string;
+  count: number;
+  total: number;
+  share: number;
+  score: number;
+}
+
+/** Project an event onto the requested outlier axis (null = no value, skip). */
+function outlierBucketKey(ev: ConvergenceEvent, axis: OutlierAxis): string | null {
+  if (axis === 'family') return kindToFamily(ev.sourceKind);
+  if (axis === 'kind') return ev.kind;
+  const country = ev.tags?.country;
+  return typeof country === 'string' && country ? country : null;
+}
+
+/**
+ * Flag rare buckets. For each axis we count members per bucket; a bucket is an
+ * outlier when its share <= `maximumPercent` (default 0.10). Two guards stop us
+ * crying wolf on thin or already-flat data: if `total` < `minTotal` (default 20)
+ * there isn't enough signal, and if the *average* bucket share is itself below
+ * `noisyPercent` (default 0.05) the axis is so fragmented that "rare" is the
+ * norm — return nothing rather than flag everything.
+ */
+export function detectOutliers(
+  events: ConvergenceEvent[],
+  opts: {
+    axes?: OutlierAxis[];
+    maximumPercent?: number;
+    noisyPercent?: number;
+    minTotal?: number;
+  } = {},
+): Outlier[] {
+  const axes = opts.axes ?? (['family', 'kind', 'country'] as OutlierAxis[]);
+  const maximumPercent = opts.maximumPercent ?? 0.1;
+  const noisyPercent = opts.noisyPercent ?? 0.05;
+  const minTotal = opts.minTotal ?? 20;
+
+  const out: Outlier[] = [];
+  for (const axis of axes) {
+    const counts = new Map<string, number>();
+    for (const ev of events) {
+      const key = outlierBucketKey(ev, axis);
+      if (key == null) continue;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    let total = 0;
+    for (const c of counts.values()) total += c;
+    if (total < minTotal || counts.size === 0) continue;
+    // Noisy-data guard: a tiny mean share means the axis is already uniform/noisy.
+    const avgShare = 1 / counts.size;
+    if (avgShare < noisyPercent) continue;
+    for (const [bucketKey, count] of counts) {
+      const share = count / total;
+      if (share > maximumPercent) continue;
+      // Rarer -> higher; blend the linear rarity term with a small volume floor
+      // so a singleton bucket doesn't outscore a small-but-corroborated one.
+      const rarity = clamp01((maximumPercent - share) / maximumPercent);
+      const volume = clamp01(Math.log2(Math.max(1, count)) / 5);
+      out.push({ axis, bucketKey, count, total, share, score: clamp01(0.8 * rarity + 0.2 * volume) });
+    }
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// (e) Single-family-only clusters: a set-difference triage flag. A cluster
+// whose member source-families are wholly inside `only` (default {'social'})
+// and never touch `absentFrom` (default {'wire_news','hazard_gov'}) was
+// reported by ONE kind of source and never corroborated by wire/gov — a soft
+// credibility / disinfo signal, NOT an alert. Scores stay deliberately low.
+//
+// Clean-room: idea inspired by SpiderFoot's analysis_first_collection_only
+// set-difference analyzer (smicallef/spiderfoot, MIT); grouping, families and
+// scoring are ours.
+// ---------------------------------------------------------------------------
+export interface SingleFamilyCluster {
+  clusterId: string;
+  families: SourceFamily[];
+  eventIds: string[];
+  sourceIds: string[];
+  memberCount: number;
+  score: number;
+}
+
+export function detectSingleFamilyOnly(
+  events: ConvergenceEvent[],
+  opts: {
+    windowMs?: number;
+    only?: Set<SourceFamily>;
+    absentFrom?: Set<SourceFamily>;
+  } = {},
+): SingleFamilyCluster[] {
+  const windowMs = opts.windowMs ?? DEFAULT_WINDOW_MS;
+  const only = opts.only ?? new Set<SourceFamily>(['social']);
+  const absentFrom = opts.absentFrom ?? new Set<SourceFamily>(['wire_news', 'hazard_gov']);
+
+  const byCluster = new Map<string, ConvergenceEvent[]>();
+  for (const ev of events) {
+    const cid = ev.tags?.cluster_id;
+    if (typeof cid !== 'string' || !cid) continue;
+    const bucket = byCluster.get(cid);
+    if (bucket) bucket.push(ev);
+    else byCluster.set(cid, [ev]);
+  }
+
+  const out: SingleFamilyCluster[] = [];
+  for (const [clusterId, members] of byCluster) {
+    // Time-bound the cluster, mirroring detectSourceTypeConvergence.
+    const latest = Math.max(...members.map((m) => m.eventAt));
+    const inWindow = members.filter((m) => latest - m.eventAt <= windowMs);
+    if (inWindow.length === 0) continue;
+
+    const families = new Set<SourceFamily>();
+    const sourceIds = new Set<string>();
+    for (const m of inWindow) {
+      families.add(kindToFamily(m.sourceKind));
+      sourceIds.add(m.sourceId);
+    }
+    // Subset of `only` AND disjoint from `absentFrom`.
+    let ok = true;
+    for (const f of families) {
+      if (!only.has(f) || absentFrom.has(f)) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+
+    out.push({
+      clusterId,
+      families: [...families].sort(),
+      eventIds: inWindow.map((m) => m.id).sort(),
+      sourceIds: [...sourceIds].sort(),
+      memberCount: inWindow.length,
+      // Triage flag, not an alert: hold the score in a low 0.3..0.5 band,
+      // rising gently with corroboration *within* the single family.
+      score: clamp01(0.3 + Math.min(1, Math.log2(Math.max(1, inWindow.length)) / 5) * 0.2),
+    });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrator: read recent events, run detectors, persist NEW firings.
 // ---------------------------------------------------------------------------
 const RECENT_EVENT_LIMIT = 4000;
@@ -489,10 +648,55 @@ export async function runConvergence(opts: RunConvergenceOptions = {}): Promise<
     fired.push(sig);
   }
 
+  const outliers = detectOutliers(events);
+  for (const o of outliers) {
+    const dedupeKey = `outlier:${o.axis}:${o.bucketKey}`;
+    if (await signalDedupeExists(dedupeKey, dedupeSince)) continue;
+    const sharePct = (o.share * 100).toFixed(1);
+    const sig = await insertSignal({
+      kind: 'outlier',
+      score: o.score,
+      title: `Rare ${o.axis}: ${o.bucketKey} (${sharePct}% of stream)`,
+      summary: `${o.count} of ${o.total} recent events fall in ${o.axis} "${o.bucketKey}" — a ${sharePct}% share`,
+      dedupeKey,
+      metadata: {
+        axis: o.axis,
+        bucketKey: o.bucketKey,
+        count: o.count,
+        total: o.total,
+        share: o.share,
+      },
+      createdAt: now,
+    });
+    bus.emitSignal(sig);
+    fired.push(sig);
+  }
+
+  const uncorroborated = detectSingleFamilyOnly(events, { windowMs });
+  for (const u of uncorroborated) {
+    const dedupeKey = `uncorr:cluster:${u.clusterId}`;
+    if (await signalDedupeExists(dedupeKey, dedupeSince)) continue;
+    const sig = await insertSignal({
+      kind: 'uncorroborated',
+      score: u.score,
+      title: `Uncorroborated cluster: ${u.families.join(', ')} only`,
+      summary: `${u.memberCount} reports in one cluster came only from ${u.families.join(', ')} — never corroborated by wire/gov`,
+      clusterId: u.clusterId,
+      sourceIds: u.sourceIds,
+      eventIds: u.eventIds,
+      dedupeKey,
+      metadata: { families: u.families, memberCount: u.memberCount },
+      createdAt: now,
+    });
+    bus.emitSignal(sig);
+    fired.push(sig);
+  }
+
   if (fired.length) {
     console.log(
       `[convergence] ${fired.length} new signal(s) from ${events.length} events ` +
-        `(${sourceConvs.length} source-conv, ${geoConvs.length} geo-conv detected)`,
+        `(${sourceConvs.length} source-conv, ${geoConvs.length} geo-conv, ` +
+        `${outliers.length} outlier, ${uncorroborated.length} uncorroborated detected)`,
     );
   }
   return { scanned: events.length, fired: fired.length, signals: fired };

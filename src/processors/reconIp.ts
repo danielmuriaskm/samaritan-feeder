@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { exec } from '../db.js';
 import type { IntelligenceEvent } from '../types.js';
+import { isAnonInfra } from './anonInfra.js';
 
 let reconHourlyCount = 0;
 let reconHourStart = Date.now();
@@ -77,6 +78,30 @@ async function enrichIp(ip: string, parentEventId: string): Promise<void> {
       }
     }
 
+    // 3. Anonymizing-infrastructure tagging (Tor exit / open proxy).
+    // This is CONTEXT, not a verdict — we tag the IP but never force the threat
+    // score. Failures are non-fatal: isAnonInfra degrades to {tor:false,proxy:false}.
+    let anonTor = false;
+    let anonProxy = false;
+    try {
+      const anon = await isAnonInfra(ip);
+      anonTor = anon.tor;
+      anonProxy = anon.proxy;
+    } catch {
+      // never let anon-infra tagging break enrichment
+    }
+    const anonInfra: string[] = [];
+    if (anonTor) anonInfra.push('tor_exit');
+    if (anonProxy) anonInfra.push('open_proxy');
+    if (anonInfra.length > 0) {
+      metadata = {
+        ...metadata,
+        tor_exit: anonTor || undefined,
+        open_proxy: anonProxy || undefined,
+        anon_infra: anonInfra,
+      };
+    }
+
     // Update entity metadata if entity exists
     await exec(
       `UPDATE intelligence_entities
@@ -85,10 +110,12 @@ async function enrichIp(ip: string, parentEventId: string): Promise<void> {
       [JSON.stringify(metadata), ip],
     );
 
-    // Create alert if Shodan found open ports or CVEs
-    if (shodanData && (shodanData.ports || shodanData.vulns)) {
-      const ports = Array.isArray(shodanData.ports) ? shodanData.ports : [];
-      const vulns = shodanData.vulns ? Object.keys(shodanData.vulns as Record<string, unknown>) : [];
+    // Create alert if Shodan found open ports or CVEs, or if the IP belongs to
+    // anonymizing infrastructure (Tor/proxy) — both are worth surfacing.
+    const hasShodanFindings = !!(shodanData && (shodanData.ports || shodanData.vulns));
+    if (hasShodanFindings || anonInfra.length > 0) {
+      const ports = shodanData && Array.isArray(shodanData.ports) ? shodanData.ports : [];
+      const vulns = shodanData && shodanData.vulns ? Object.keys(shodanData.vulns as Record<string, unknown>) : [];
 
       await createReconEvent({
         title: `Recon: IP ${ip} enrichment`,
@@ -98,6 +125,7 @@ async function enrichIp(ip: string, parentEventId: string): Promise<void> {
           geo ? `ISP: ${geo.isp}` : '',
           ports.length ? `Open ports: ${ports.join(', ')}` : '',
           vulns.length ? `CVEs: ${vulns.join(', ')}` : '',
+          anonInfra.length ? `Anonymizing infrastructure: ${anonInfra.join(', ')}` : '',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -106,6 +134,9 @@ async function enrichIp(ip: string, parentEventId: string): Promise<void> {
           recon_type: 'enrichment',
           parent_event_id: parentEventId,
           ip,
+          ...(anonTor ? { tor_exit: true } : {}),
+          ...(anonProxy ? { open_proxy: true } : {}),
+          ...(anonInfra.length ? { anon_infra: anonInfra } : {}),
           ...metadata,
         },
         location: geo?.lat && geo?.lon ? { lat: geo.lat, lon: geo.lon } : undefined,
