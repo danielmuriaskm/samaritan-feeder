@@ -49,6 +49,7 @@ app.get('/:userId', async (c) => {
         if (passesEvent(e)) send('event', compactEvent(e));
       });
       const offSignal = bus.onSignal((s: IntelSignal) => {
+        if (s.triageState === 'dismissed') return; // 006: never stream operator-dismissed signals
         if (typeof minScore !== 'number' || s.score >= minScore) send('signal', s);
       });
 

@@ -1,0 +1,42 @@
+# Declarative rule for samaritan-feeder's rule engine (src/processors/ruleEngine.ts).
+#
+# Clean-room note: the collect/aggregate/analysis/headline rule shape is inspired
+# by SpiderFoot's correlation DSL (smicallef/spiderfoot, MIT) but reimplemented
+# for samaritan's own event model. This file is original.
+
+# Must match the filename (without .yaml).
+id: social_only_surge
+
+# Rule syntax version. Only 1 is supported.
+version: 1
+
+meta:
+  name: Social story surge
+  description: >
+    A large cluster of SOCIAL posts (reddit, twitter, bluesky, tiktok, ...) on one
+    story. We collect events whose source family is `social`, group them by their
+    NLP cluster id, and fire when a single cluster carries at least 5 such social
+    posts. This is a virality / amplification signal worth a human glance. NOTE:
+    this rule only measures social volume — it does NOT assert the absence of
+    wire/gov corroboration; the dedicated `uncorroborated` signal
+    (detectSingleFamilyOnly) is what actually tests cross-family absence.
+  risk: LOW
+
+# Collect: keep only social-family events that carry a cluster id.
+collect:
+  - method: exact
+    field: sourceFamily
+    value: social
+  - method: exists
+    field: tags.cluster_id
+
+# Group the collected events by their shared cluster id.
+aggregate:
+  field: tags.cluster_id
+
+# Fire when a cluster has at least 5 social members.
+analysis:
+  method: threshold
+  minCount: 5
+
+headline: "Social surge in cluster {field} ({metric} posts)"

@@ -25,14 +25,16 @@ import mitreRoutes from './routes/mitre.js';
 import cvRoutes from './routes/cv.js';
 import discoverRoutes from './routes/discover.js';
 import radarRoutes from './routes/radar.js';
+import aoiRoutes from './routes/aoi.js';
 import { listChannels, getChannel, createChannel, deleteChannel, setEnabled, isChannelKind } from './store/channels.js';
-import { listSignals } from './store/signals.js';
+import { listSignals, getSignal, setSignalTriage, muteSignal, unmuteDedupeKey, listMutes } from './store/signals.js';
+import { getEvent } from './store/events.js';
 import { latestBrief } from './store/briefs.js';
-import type { SignalKind } from './types.js';
+import type { SignalKind, TriageState } from './types.js';
 
 const app = new Hono();
 
-// --- 005: signals (correlation/freshness) read route ---
+// --- 005: signals (correlation/freshness) read route + 006 triage/mute ---
 const signalRoutes = new Hono();
 signalRoutes.get('/', async (c) => {
   const kindsParam = c.req.query('kinds');
@@ -40,7 +42,43 @@ signalRoutes.get('/', async (c) => {
   const since = c.req.query('since') ? Number(c.req.query('since')) : undefined;
   const minScore = c.req.query('minScore') ? Number(c.req.query('minScore')) : undefined;
   const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-  return c.json({ signals: await listSignals({ kinds, since, minScore, limit }) });
+  // 006: dismissed signals are hidden by default; ?includeDismissed=true to see them.
+  const excludeDismissed = c.req.query('includeDismissed') !== 'true';
+  return c.json({ signals: await listSignals({ kinds, since, minScore, limit, excludeDismissed }) });
+});
+// 006: muted dedupe keys (registered BEFORE /:id so it isn't shadowed by the param route).
+signalRoutes.get('/mutes', async (c) => c.json({ mutes: await listMutes() }));
+// 006: drill-down — the signal plus the member events behind it (eventIds persisted at creation).
+signalRoutes.get('/:id', async (c) => {
+  const sig = await getSignal(c.req.param('id'));
+  if (!sig) return c.json({ error: 'Not found' }, 404);
+  const ids = (sig.eventIds ?? []).slice(0, 50);
+  const events = (await Promise.all(ids.map((id) => getEvent(id)))).filter((e) => e !== undefined);
+  return c.json({ signal: sig, events });
+});
+// 006: operator triage — open | acknowledged | dismissed.
+signalRoutes.patch('/:id/triage', async (c) => {
+  const b = await c.req.json().catch(() => ({}));
+  const state = b?.state as TriageState;
+  if (state !== 'open' && state !== 'acknowledged' && state !== 'dismissed') {
+    return c.json({ error: 'state must be open|acknowledged|dismissed' }, 400);
+  }
+  await setSignalTriage(c.req.param('id'), state);
+  return c.json({ ok: true });
+});
+// 006: mute a signal's dedupe key so the recurring detector stops re-firing it.
+// body { mutedUntil?: number (ms epoch; omit/null = permanent), reason?: string }.
+signalRoutes.post('/:id/mute', async (c) => {
+  const b = await c.req.json().catch(() => ({}));
+  const mutedUntil = typeof b?.mutedUntil === 'number' ? b.mutedUntil : null;
+  const reason = typeof b?.reason === 'string' ? b.reason : undefined;
+  await muteSignal(c.req.param('id'), mutedUntil, reason);
+  return c.json({ ok: true });
+});
+signalRoutes.delete('/:id/mute', async (c) => {
+  const sig = await getSignal(c.req.param('id'));
+  if (sig?.dedupeKey) await unmuteDedupeKey(sig.dedupeKey);
+  return c.json({ ok: true });
 });
 
 // --- 005: multi-channel delivery CRUD ---
@@ -107,6 +145,7 @@ app.route('/channels', channelRoutes);
 app.route('/discover', discoverRoutes);
 app.route('/radar', radarRoutes);
 app.route('/cameras', radarRoutes);
+app.route('/aoi', aoiRoutes);
 
 // API prefix for web UI (Vite dev proxy uses /api)
 const api = new Hono();
@@ -129,6 +168,7 @@ api.route('/channels', channelRoutes);
 api.route('/discover', discoverRoutes);
 api.route('/radar', radarRoutes);
 api.route('/cameras', radarRoutes);
+api.route('/aoi', aoiRoutes);
 // Brief + digest, shared between /api (the web console fetches /api/brief/:userId)
 // and the root (Samaritan system-prompt injection).
 async function briefHandler(c: Context) {

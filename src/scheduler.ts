@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { listSources, updateSource, recordPollSuccess, recordPollFailure } from './store/sources.js';
-import { createEvent, dedupeExists, makeDedupeHash, deleteOldEvents, reserveDedupe, isUniqueViolation } from './store/events.js';
+import { createEvent, dedupeExists, makeDedupeHash, deleteOldEvents, reserveDedupe, isUniqueViolation, runLineageSweep } from './store/events.js';
 import { bus } from './bus.js';
 import { computeScore } from './scoring/score.js';
 import { trustForKind } from './scoring/sourceTrust.js';
@@ -35,6 +35,15 @@ import { runCertMonitor } from './processors/certMonitor.js';
 import { runTheHarvester } from './processors/theharvester.js';
 import { runMetagoofil } from './processors/metagoofil.js';
 import { runPassiveTotal } from './processors/passivetotal.js';
+// 006 (SpiderFoot-port layer): declarative rule engine, lineage/data-class
+// backfill, risk band, data-class, AOI weighting, and forward-geocode backfill.
+import { runRuleEngine } from './processors/ruleEngine.js';
+import { deriveRiskBand } from './scoring/severity.js';
+import { deriveDataClass } from './lib/dataClass.js';
+import { getEnabledAoi, type AoiRule } from './store/aoi.js';
+import { aoiScore } from './scoring/aoi.js';
+import { extractPlace } from './geo/placeExtract.js';
+import { geocodePlace } from './geo/forwardGeocode.js';
 import { config } from './config.js';
 import type { RawEvent, IntelligenceEvent, SourceKind } from './types.js';
 import { randomUUID } from 'crypto';
@@ -45,6 +54,9 @@ let digestTask: cron.ScheduledTask | null = null;
 let clusterTask: cron.ScheduledTask | null = null;
 let convergenceTask: cron.ScheduledTask | null = null;
 let freshnessTask: cron.ScheduledTask | null = null;
+let ruleTask: cron.ScheduledTask | null = null;
+let lineageTask: cron.ScheduledTask | null = null;
+let geocodeTask: cron.ScheduledTask | null = null;
 
 // Re-entrancy guard: node-cron does NOT skip a tick if the prior run is still
 // going. CV sidecar round-trips can push a cycle past 60s, so without this two
@@ -102,7 +114,41 @@ export function startScheduler(): void {
     }
   });
 
-  console.log('[scheduler] Started (poll: 1min, cleanup: 3am, digest: hourly, cluster: 15min, convergence: 5min, freshness: 10min)');
+  // 006: declarative rule engine every 5 min, staggered 2 min after convergence so
+  // the two 4k-event scans don't hit the same tick.
+  ruleTask = cron.schedule('2-59/5 * * * *', async () => {
+    try {
+      const r = await runRuleEngine();
+      if (r.fired) console.log(`[scheduler] Rule engine: ${r.fired} signal(s) from ${r.scanned} events`);
+    } catch (err) {
+      console.error('[scheduler] Rule engine failed:', err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  // 006: lineage + data-class backfill every 15 min (promotes tags.parent_event_id
+  // into the event_lineage edge table and fills data_class). Off the hot path.
+  lineageTask = cron.schedule('7-59/15 * * * *', async () => {
+    try {
+      const r = await runLineageSweep(Date.now() - 24 * 60 * 60 * 1000);
+      if (r.edges || r.classified) console.log(`[scheduler] Lineage sweep: ${r.edges} edges, ${r.classified} classified`);
+    } catch (err) {
+      console.error('[scheduler] Lineage sweep failed:', err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  // 006: forward-geocode backfill every 10 min (resolve place names -> coarse coords
+  // for location-less text/alert events so they can join geo-convergence). The
+  // geocoder self-rate-limits to <=1 req/s; this runs off the hot path, bounded.
+  geocodeTask = cron.schedule('3-59/10 * * * *', async () => {
+    await runGeoBackfill();
+  });
+
+  // Promote any already-stamped provenance on startup (bounded 7d lookback).
+  void runLineageSweep(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    .then((r) => { if (r.edges || r.classified) console.log(`[scheduler] Startup lineage sweep: ${r.edges} edges, ${r.classified} classified`); })
+    .catch(() => {});
+
+  console.log('[scheduler] Started (poll: 1min, cleanup: 3am, digest: hourly, cluster: 15min, convergence: 5min, freshness: 10min, rules: 5min, lineage: 15min, geocode: 10min)');
 }
 
 export function stopScheduler(): void {
@@ -112,12 +158,18 @@ export function stopScheduler(): void {
   clusterTask?.stop();
   convergenceTask?.stop();
   freshnessTask?.stop();
+  ruleTask?.stop();
+  lineageTask?.stop();
+  geocodeTask?.stop();
   pollTask = null;
   cleanupTask = null;
   digestTask = null;
   clusterTask = null;
   convergenceTask = null;
   freshnessTask = null;
+  ruleTask = null;
+  lineageTask = null;
+  geocodeTask = null;
   console.log('[scheduler] Stopped');
 }
 
@@ -327,6 +379,34 @@ async function ingestRawEvent(sourceId: string, raw: RawEvent, sourceKind?: Sour
     }
   }
 
+  // 006: Area-of-Interest weighting — nudge in-AOI events up and tag them. Pure
+  // predicate over cached rules; best-effort (never blocks the insert).
+  try {
+    const aoiRules = await getAoiRulesCached(Date.now());
+    if (aoiRules.length) {
+      const a = aoiScore(
+        { tags: event.tags, location: event.location, title: event.title, content: event.content },
+        aoiRules,
+      );
+      if (a.matched) {
+        const prior = event.score ?? 0;
+        const AOI_WEIGHT = 0.2; // gentle upward nudge toward 1, proportional to AOI strength
+        event.score = Math.max(0, Math.min(1, prior + AOI_WEIGHT * a.score * (1 - prior)));
+        event.scoreComponents = {
+          ...(event.scoreComponents ?? { severity: 0, threat: 0, corroboration: 0, sourceTrust: 0, freshness: 0, base: 0 }),
+          aoi: a.score,
+        };
+        event.tags = { ...event.tags, aoi: true, aoi_rules: a.matchedRuleIds };
+      }
+    }
+  } catch (err) {
+    console.error('[scheduler] AOI scoring failed:', err instanceof Error ? err.message : String(err));
+  }
+
+  // 006: discrete risk band (from the FINAL score, after any AOI nudge) + finding-class label.
+  event.riskBand = deriveRiskBand(event.score);
+  event.dataClass = deriveDataClass(event);
+
   try {
     await createEvent(event);
   } catch (err) {
@@ -418,6 +498,10 @@ async function runCleanup(): Promise<void> {
     [rawBefore],
   );
 
+  // 006: purge orphaned lineage edges past retention + expired signal mutes.
+  await exec(`DELETE FROM event_lineage WHERE created_at < $1`, [before]);
+  await exec(`DELETE FROM signal_mutes WHERE muted_until IS NOT NULL AND muted_until < $1`, [Date.now()]);
+
   // Purge any REDACTED CV best-frames at the same 7-day window (keeps the
   // anonymity argument real: imagery gone, aggregate rows survive to 30d and
   // then cascade-delete with their parent event).
@@ -459,4 +543,55 @@ async function queryRecentEventCount(sourceId: string, since: number): Promise<n
     [sourceId, since],
   );
   return Number(row?.count ?? 0);
+}
+
+// 006: AOI rules are consulted on every ingest, so cache them briefly rather than
+// hitting the DB per event. Best-effort — on error reuse the last good set (or empty).
+let aoiCache: { rules: AoiRule[]; at: number } | null = null;
+const AOI_CACHE_TTL_MS = 60_000;
+async function getAoiRulesCached(now: number): Promise<AoiRule[]> {
+  if (aoiCache && now - aoiCache.at < AOI_CACHE_TTL_MS) return aoiCache.rules;
+  try {
+    const rules = await getEnabledAoi();
+    aoiCache = { rules, at: now };
+    return rules;
+  } catch {
+    return aoiCache?.rules ?? [];
+  }
+}
+
+// 006: resolve coarse coordinates for location-less text/alert events from an
+// extracted place name so they can join geo-convergence. Off the hot path; the
+// geocoder enforces Nominatim's <=1 req/s, so this is bounded per run.
+async function runGeoBackfill(): Promise<void> {
+  try {
+    const { query, exec } = await import('./db.js');
+    const since = Date.now() - 6 * 60 * 60 * 1000;
+    const rows = await query<{ id: string; title: string | null; content: string; tags: unknown }>(
+      `SELECT id, title, content, tags FROM intelligence_events
+        WHERE location_lat IS NULL AND event_at >= $1
+          AND kind IN ('text','social_post','alert','anomaly')
+        ORDER BY event_at DESC LIMIT 25`,
+      [since],
+    );
+    let geocoded = 0;
+    for (const r of rows) {
+      const place = extractPlace(r.title ?? undefined, r.content);
+      if (!place || place.confidence < 0.6) continue;
+      const coords = await geocodePlace(place.name);
+      if (!coords) continue;
+      const geoTags = tagLocation({ location: coords });
+      const tags =
+        r.tags == null ? {} : typeof r.tags === 'string' ? JSON.parse(r.tags) : (r.tags as Record<string, unknown>);
+      const merged = { ...tags, ...geoTags, geocoded_place: place.name, geocoded: true };
+      await exec(
+        `UPDATE intelligence_events SET location_lat = $1, location_lon = $2, tags = $3 WHERE id = $4 AND location_lat IS NULL`,
+        [coords.lat, coords.lon, JSON.stringify(merged), r.id],
+      );
+      geocoded++;
+    }
+    if (geocoded) console.log(`[scheduler] Geo-backfill resolved ${geocoded} event location(s)`);
+  } catch (err) {
+    console.error('[scheduler] Geo backfill failed:', err instanceof Error ? err.message : String(err));
+  }
 }

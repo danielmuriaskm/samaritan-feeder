@@ -38,6 +38,7 @@ export interface ToolResult {
 const EVENT_KINDS: EventKind[] = ['visual', 'text', 'anomaly', 'trend', 'alert', 'social_post', 'detection'];
 const SIGNAL_KINDS: SignalKind[] = [
   'convergence', 'geo_convergence', 'velocity_spike', 'silent_source', 'volume_anomaly', 'cluster_surge',
+  'outlier', 'uncorroborated', 'rule_match',
 ];
 
 /** Compact projections keep MCP results lean — only what an analyst agent needs. */
@@ -172,6 +173,8 @@ async function handleQuerySignals(a: Record<string, unknown>): Promise<ToolResul
     kinds: pickKinds(a.kinds, SIGNAL_KINDS),
     minScore: typeof a.min_score === 'number' ? a.min_score : undefined,
     limit,
+    // 006: don't surface operator-dismissed signals to the analyst agent.
+    excludeDismissed: true,
   });
   return text(shapeToolResult(signals, { fields: SIGNAL_FIELDS, maxItems: limit }));
 }

@@ -1,0 +1,38 @@
+# Declarative rule for samaritan-feeder's rule engine (src/processors/ruleEngine.ts).
+#
+# Clean-room note: the collect/aggregate/analysis/headline rule shape is inspired
+# by SpiderFoot's correlation DSL (smicallef/spiderfoot, MIT) but reimplemented
+# for samaritan's own event model. This file is original.
+
+id: rare_country
+
+version: 1
+
+meta:
+  name: Events from an unusually rare country
+  description: >
+    In a firehose dominated by a handful of countries, the RARE country is often
+    the interesting one. We collect every event tagged with a `country`, group by
+    that country, and flag any country whose share of the recent stream is at most
+    5%. Two guards stop us crying wolf: we need at least 20 country-tagged events
+    total, and if the average per-country share is itself tiny (the data is already
+    fragmented across many countries) we report nothing.
+  risk: INFO
+
+# Collect: every event carrying a country tag.
+collect:
+  - method: exists
+    field: tags.country
+
+# Group by country.
+aggregate:
+  field: tags.country
+
+# Flag countries that are <= 5% of the collected volume (with noisy-data guards).
+analysis:
+  method: outlier
+  maximumPercent: 0.05
+  noisyPercent: 0.05
+  minTotal: 20
+
+headline: "Unusually rare country in the stream: {field} ({metric} events)"

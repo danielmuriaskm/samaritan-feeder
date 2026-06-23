@@ -1,9 +1,15 @@
 import { config } from '../config.js';
 import { exec } from '../db.js';
 import type { IntelligenceEvent } from '../types.js';
+import { safeFetch } from '../util/safeFetch.js';
 
 let reconHourlyCount = 0;
 let reconHourStart = Date.now();
+
+/** Small async sleep used to throttle between keyless passive-DNS providers. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // Common subdomain wordlist for brute-force enumeration
 const SUBDOMAIN_WORDLIST = [
@@ -212,12 +218,67 @@ async function reconDomain(domain: string, parentEventId: string): Promise<void>
       reconHourlyCount++;
     }
 
+    // 7. Keyless passive-DNS enrichment (mnemonic + hackertarget). Both are
+    //    throttled and degrade to empty on error. We collect their discovered
+    //    IPs so step 6's reverse-DNS handling can also cover them.
+    const passiveIps = new Set<string>();
+
+    if (reconHourlyCount < config.RECON_MAX_EVENTS_PER_HOUR) {
+      const mnemonicHits = await queryMnemonic(domain);
+      for (const hit of mnemonicHits) {
+        if (reconHourlyCount >= config.RECON_MAX_EVENTS_PER_HOUR) break;
+        await createReconEvent({
+          title: `Recon: passive DNS ${hit.record} ${hit.value}`,
+          content: `Passive DNS record for ${domain} (mnemonic):\nRecord: ${hit.record}\nValue: ${hit.value}`,
+          tags: {
+            recon_source: 'domain',
+            recon_type: 'passive_dns',
+            source: 'mnemonic',
+            parent_domain: domain,
+            parent_event_id: parentEventId,
+            record: hit.record,
+            value: hit.value,
+          },
+        });
+        reconHourlyCount++;
+        if (hit.record === 'A' || hit.record === 'AAAA') passiveIps.add(hit.value);
+      }
+    }
+
+    // Throttle between the two providers to stay polite to both keyless APIs.
+    await sleep(750);
+
+    if (reconHourlyCount < config.RECON_MAX_EVENTS_PER_HOUR) {
+      const cohosts = await queryHackertarget(domain);
+      for (const co of cohosts) {
+        if (reconHourlyCount >= config.RECON_MAX_EVENTS_PER_HOUR) break;
+        await createReconEvent({
+          title: `Recon: passive DNS ${co.host} -> ${co.ip}`,
+          content: `Co-hosted record for ${domain} (hackertarget):\nHost: ${co.host}\nIP: ${co.ip}`,
+          tags: {
+            recon_source: 'domain',
+            recon_type: 'passive_dns',
+            source: 'hackertarget',
+            parent_domain: domain,
+            parent_event_id: parentEventId,
+            record: 'A',
+            value: co.ip,
+            host: co.host,
+          },
+        });
+        reconHourlyCount++;
+        passiveIps.add(co.ip);
+      }
+    }
+
     // 6. Reverse DNS for discovered IPs (Fierce-style)
     const discoveredIps = [...new Set([
       ...dnsRecords.filter((r) => r.type === 'A').map((r) => r.value),
       ...bruteResults.map((r) => r.ip),
+      ...passiveIps,
     ])];
     for (const ip of discoveredIps.slice(0, 10)) {
+      if (reconHourlyCount >= config.RECON_MAX_EVENTS_PER_HOUR) break;
       const ptr = await queryReverseDns(ip);
       if (ptr) {
         await createReconEvent({
@@ -358,6 +419,107 @@ async function queryReverseDns(ip: string): Promise<string | undefined> {
     return data.Answer?.[0]?.data;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Keyless passive-DNS lookup via mnemonic's PDNS v3 API.
+ *
+ * Clean-room port of the idea behind SpiderFoot's sfp_mnemonic.py
+ * (smicallef/spiderfoot, MIT) — no code copied. Queries the public, keyless
+ * endpoint, verifies the JSON envelope's responseCode, treats 402 as a quota
+ * stop, de-dupes (record,value) pairs, filters out stale answers when a
+ * lastSeenTimestamp is present, and caps the result set.
+ */
+async function queryMnemonic(domain: string): Promise<Array<{ record: string; value: string }>> {
+  try {
+    const url = `https://api.mnemonic.no/pdns/v3/${encodeURIComponent(domain)}`;
+    const res = await safeFetch(url, { timeoutMs: 15000 });
+    if (!res.ok) return [];
+
+    const data = (await res.json()) as {
+      responseCode?: number;
+      data?: Array<{ rrtype?: string; answer?: string; value?: string; lastSeenTimestamp?: number }>;
+    };
+
+    // 402 = quota exhausted -> back off quietly. Anything other than 200 is
+    // treated as no usable data.
+    if (data.responseCode === 402) return [];
+    if (data.responseCode !== 200) return [];
+
+    const rows = Array.isArray(data.data) ? data.data : [];
+
+    // Recency window: keep answers seen within the last ~180 days when a
+    // lastSeenTimestamp is provided; rows without one are kept (no signal to drop).
+    const recencyCutoff = Date.now() - 180 * 24 * 60 * 60 * 1000;
+
+    const seen = new Set<string>();
+    const results: Array<{ record: string; value: string }> = [];
+    for (const row of rows) {
+      const record = String(row.rrtype ?? '').toUpperCase().trim();
+      const value = String(row.answer ?? row.value ?? '').trim();
+      if (!record || !value) continue;
+
+      if (typeof row.lastSeenTimestamp === 'number' && row.lastSeenTimestamp < recencyCutoff) {
+        continue;
+      }
+
+      const key = `${record}|${value}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      results.push({ record, value });
+      if (results.length >= 100) break;
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Keyless reverse-IP / co-host lookup via HackerTarget's hostsearch endpoint.
+ *
+ * Clean-room port of the idea behind SpiderFoot's sfp_hackertarget.py
+ * (smicallef/spiderfoot, MIT) — no code copied. The endpoint returns a plain
+ * `host,ip` CSV body. We bail on HTTP 429 and on the well-known
+ * "API count exceeded" body, parse each `host,ip` row, and cap co-hosts.
+ */
+async function queryHackertarget(domain: string): Promise<Array<{ host: string; ip: string }>> {
+  try {
+    const url = `https://api.hackertarget.com/hostsearch/?q=${encodeURIComponent(domain)}`;
+    const res = await safeFetch(url, { timeoutMs: 15000 });
+    // 429 = rate limited -> bail.
+    if (res.status === 429) return [];
+    if (!res.ok) return [];
+
+    const text = await res.text();
+    // Free-tier quota message arrives as a 200 body, so check the text too.
+    if (!text || text.includes('API count exceeded')) return [];
+    // Other plaintext error markers from the API.
+    if (text.startsWith('error') || text.includes('No DNS')) return [];
+
+    const seen = new Set<string>();
+    const results: Array<{ host: string; ip: string }> = [];
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const comma = trimmed.indexOf(',');
+      if (comma === -1) continue;
+      const host = trimmed.slice(0, comma).trim().toLowerCase();
+      const ip = trimmed.slice(comma + 1).trim();
+      if (!host || !ip) continue;
+
+      const key = `${host}|${ip}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      results.push({ host, ip });
+      if (results.length >= 100) break;
+    }
+    return results;
+  } catch {
+    return [];
   }
 }
 

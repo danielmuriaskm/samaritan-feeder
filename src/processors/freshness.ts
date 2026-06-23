@@ -1,6 +1,6 @@
 import type { SourceConfig, SourceHealthState, IntelSignal } from '../types.js';
 import { listSources } from '../store/sources.js';
-import { insertSignal, signalDedupeExists } from '../store/signals.js';
+import { insertSignal, isSuppressed } from '../store/signals.js';
 import { bus } from '../bus.js';
 import {
   countEventsSince,
@@ -311,7 +311,7 @@ async function sweepSource(
   // --- silent-source signal ---
   if (silent) {
     const dedupeKey = `silent_source:${source.id}`;
-    if (!(await signalDedupeExists(dedupeKey, dayAgo))) {
+    if (!(await isSuppressed(dedupeKey, dayAgo, now))) {
       const idleMs = source.lastEventAt != null ? now - source.lastEventAt : undefined;
       const idleHours = idleMs != null ? Math.round(idleMs / (60 * 60 * 1000)) : undefined;
       const sig: Omit<IntelSignal, 'id' | 'createdAt'> = {
@@ -353,7 +353,7 @@ async function sweepSource(
   });
   if (anomaly.anomaly) {
     const dedupeKey = `volume_anomaly:${anomaly.direction}:${source.id}`;
-    if (!(await signalDedupeExists(dedupeKey, dayAgo))) {
+    if (!(await isSuppressed(dedupeKey, dayAgo, now))) {
       const sig: Omit<IntelSignal, 'id' | 'createdAt'> = {
         kind: 'volume_anomaly',
         score: Math.min(0.95, 0.4 + Math.abs(anomaly.z) / 10),

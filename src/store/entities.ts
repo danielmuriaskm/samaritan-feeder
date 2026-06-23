@@ -199,13 +199,82 @@ function generateEntityId(): string {
 }
 
 function guessEntityType(value: string): ExtractedEntity['type'] {
-  const v = value.toLowerCase().trim();
+  const raw = value.trim();
+  const v = raw.toLowerCase();
   if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v)) return 'ipv4';
   if (/^cve-\d{4}-\d{4,}$/i.test(v)) return 'cve';
-  if (/^[a-f0-9]{32}$/i.test(v)) return 'hash_md5';
-  if (/^[a-f0-9]{40}$/i.test(v)) return 'hash_sha1';
+  // Ethereum 0x{40} before any generic hex check so it isn't lost.
+  if (/^0x[a-f0-9]{40}$/i.test(v)) return 'eth_address';
+  // Hashes: most-specific (longest) first so e.g. a 128-hex string isn't
+  // mislabeled as a 64-hex SHA-256.
+  if (/^[a-f0-9]{128}$/i.test(v)) return 'hash_sha512';
   if (/^[a-f0-9]{64}$/i.test(v)) return 'hash_sha256';
+  if (/^[a-f0-9]{40}$/i.test(v)) return 'hash_sha1';
+  if (/^[a-f0-9]{32}$/i.test(v)) return 'hash_md5';
   if (v.includes('@')) return 'email';
   if (/^as\d+$/.test(v)) return 'asn';
+  // Generic URL.
+  if (/^https?:\/\//i.test(v)) return 'url';
+  // Web-analytics IDs (UA-/G-/GTM-/pub-) — matched case-insensitively.
+  if (/^(?:ua-\d{4,10}-\d{1,4}|g-[a-z0-9]{6,12}|gtm-[a-z0-9]{5,9}|pub-\d{14,22})$/i.test(v)) return 'analytics_id';
+  // IBAN: structural check + mod-97 checksum.
+  if (/^[a-z]{2}\d{2}[a-z0-9]{11,30}$/i.test(v) && isValidIbanChecksum(raw)) return 'iban';
   return 'domain';
+}
+
+/**
+ * IBAN mod-97 checksum (ISO 7064), digit-by-digit to avoid integer overflow.
+ * Mirrors the validator in entityExtract.ts so guessEntityType can label
+ * LLM-supplied IBAN strings without importing the extractor.
+ */
+function isValidIbanChecksum(value: string): boolean {
+  const v = value.replace(/[\s-]/g, '').toUpperCase();
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(v)) return false;
+  const rearranged = v.slice(4) + v.slice(0, 4);
+  let remainder = 0;
+  for (const ch of rearranged) {
+    const chunk =
+      ch >= '0' && ch <= '9'
+        ? ch
+        : String(ch.charCodeAt(0) - 'A'.charCodeAt(0) + 10);
+    for (const d of chunk) {
+      remainder = (remainder * 10 + (d.charCodeAt(0) - 48)) % 97;
+    }
+  }
+  return remainder === 1;
+}
+
+/**
+ * Same-operator pivot for web-analytics IDs (clean-room port of the idea behind
+ * SpiderFoot's sfp_webanalytics correlation): given an analytics_id value (GA
+ * UA-/G-, GTM-, AdSense pub-), find the domain/host entities that co-occur with
+ * that same id in events. Two sites sharing one analytics id are commonly run
+ * by the same operator.
+ *
+ * Best-effort and read-only. Modeled on getRelatedEntities(): we self-join
+ * event_entities on shared events, anchored to the analytics_id entity, and
+ * keep only the domain/url neighbours.
+ */
+export async function findSharedAnalyticsOperators(
+  value: string,
+): Promise<(Entity & { sharedEvents: number })[]> {
+  const v = value.toLowerCase().trim();
+  const rows = await query<Record<string, unknown>>(
+    `SELECT e.*, COUNT(*)::int as shared_events
+     FROM intelligence_entities anchor
+     JOIN event_entities ee_anchor ON anchor.id = ee_anchor.entity_id
+     JOIN event_entities ee_other ON ee_anchor.event_id = ee_other.event_id
+     JOIN intelligence_entities e ON e.id = ee_other.entity_id
+     WHERE anchor.type = 'analytics_id'
+       AND anchor.value = $1
+       AND e.id != anchor.id
+       AND e.type IN ('domain', 'url')
+     GROUP BY e.id
+     ORDER BY shared_events DESC`,
+    [v],
+  );
+  return rows.map((r) => ({
+    ...fromEntityRow(r),
+    sharedEvents: Number(r.shared_events),
+  }));
 }
