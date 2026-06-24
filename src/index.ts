@@ -142,6 +142,9 @@ app.route('/hispacams', hispacamsRoutes);
 app.route('/windy', windyRoutes);
 app.route('/auth', authRoutes);
 app.route('/graph', graphRoutes);
+// Also expose the graph under /pulse so the Samaritan web UI can proxy it as the
+// "Pulse" tab (the /graph name is taken by Samaritan's chat-memory graph).
+app.route('/pulse', graphRoutes);
 app.route('/mitre', mitreRoutes);
 app.route('/cv', cvRoutes);
 app.route('/signals', signalRoutes);
@@ -166,6 +169,7 @@ api.route('/hispacams', hispacamsRoutes);
 api.route('/windy', windyRoutes);
 api.route('/auth', authRoutes);
 api.route('/graph', graphRoutes);
+api.route('/pulse', graphRoutes);
 api.route('/mitre', mitreRoutes);
 api.route('/cv', cvRoutes);
 api.route('/signals', signalRoutes);
