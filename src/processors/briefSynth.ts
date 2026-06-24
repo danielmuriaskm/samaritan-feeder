@@ -128,6 +128,12 @@ function dedupKeyOf(e: IntelligenceEvent): string {
   const cid = clusterIdOf(e);
   if (cid) return `c:${cid}`;
   const title = normalizeForKey(e.title ?? '');
+  // Templated-feed alerts/anomalies (NWS, GDACS, USGS, …) re-issue the SAME
+  // headline for many areas / repeat updates. In a top-level digest those collapse
+  // to ONE representative by title alone — the lead's "+N more" already conveys the
+  // count, so we don't show "NWS Severe Fire Weather Watch" three times. Free-form
+  // text / social keep the content signature so genuinely distinct posts don't fuse.
+  if ((e.kind === 'alert' || e.kind === 'anomaly') && title) return `a:${e.kind} ${title}`;
   const content = normalizeForKey(e.content ?? '').slice(0, DEDUP_CONTENT_CHARS);
   // No cluster tag and no title/content text: nothing real to match on.
   // Treat as a singleton (unique event id) so unrelated empties never fuse.
@@ -485,7 +491,7 @@ async function tryLLMDraft(events: IntelligenceEvent[]): Promise<DraftBrief | nu
 // ---------------------------------------------------------------------------
 
 /** Window assembled for a digest run (last hour by default). */
-const DIGEST_WINDOW_MS = 60 * 60 * 1000;
+const DIGEST_WINDOW_MS = 6 * 60 * 60 * 1000; // 6h — a 1h window was too thin (often only a handful of events)
 /** Minimum composite score for an event to enter the digest. */
 const DIGEST_MIN_SCORE = 0.4;
 /** Pull headroom before orderAndCap trims to the prompt budget. */

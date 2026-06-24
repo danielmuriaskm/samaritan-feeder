@@ -74,6 +74,7 @@ export interface IntelSignal {
   location?: { lat: number; lon: number };
   windowStart?: number;
   windowEnd?: number;
+  dedupeKey?: string;
   metadata?: Record<string, unknown>;
   createdAt: number;
   // 006: operator triage + discrete band.

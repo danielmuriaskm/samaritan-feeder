@@ -1612,7 +1612,7 @@ export default function MapView() {
 
       {/* Map */}
       <div style={{ flex: 1, position: 'relative' }}>
-        <MapContainer center={[25, 10]} zoom={2} style={{ height: '100%', width: '100%' }} minZoom={2} worldCopyJump>
+        <MapContainer center={[50, 10]} zoom={4} style={{ height: '100%', width: '100%' }} minZoom={2} worldCopyJump>
           {/* OpenStreetMap tiles, matching the radar map in the Samaritan web UI
               (apps/web/src/routes/Radar.tsx) — standard OSM, not the dark CARTO basemap. */}
           <TileLayer
