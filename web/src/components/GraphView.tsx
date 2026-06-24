@@ -339,6 +339,14 @@ export default function GraphView() {
   // ⌘K / Ctrl-K command palette (Phase 2 chrome) — quick fuzzy jump to any node
   // plus a few graph actions, layered as a modal over the whole component.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // LASSO / rubber-band multi-select. lassoMode arms the overlay; lassoRect holds
+  // the live drag rectangle (OVERLAY-LOCAL pixel coords) while dragging; selectedIds
+  // is the resolved multi-selection. The overlay div sits exactly over the canvas so
+  // graph2ScreenCoords() (canvas pixels) aligns 1:1 with the rect's local coords.
+  const [lassoMode, setLassoMode] = useState(false);
+  const [lassoRect, setLassoRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lassoLayerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<any>(null);
 
   // Current export/fetch options derived from the toggles.
@@ -650,6 +658,139 @@ export default function GraphView() {
     return set;
   }, [selectedNode, filteredLinks]);
 
+  // LASSO SELECTION SUMMARY — derived from selectedIds over the rendered set:
+  // entity buckets (colored chip + count), event kinds (colored chip + count),
+  // and the top entities by degree for the quick-chip strip. Recomputed only when
+  // the selection or the rendered nodes change.
+  const selectionSummary = useMemo(() => {
+    if (selectedIds.size === 0) {
+      return { entityBuckets: [], eventKinds: [], topEntities: [], total: 0 };
+    }
+    const buckets = new Map<EntityBucket, number>();
+    const kinds = new Map<string, number>();
+    const entities: Array<{ node: GraphNode; deg: number }> = [];
+    let total = 0;
+    for (const n of filteredNodes) {
+      if (!selectedIds.has(n.id)) continue;
+      total++;
+      if (n.type === 'entity') {
+        const b = entityBucket(n.entityType);
+        buckets.set(b, (buckets.get(b) ?? 0) + 1);
+        entities.push({ node: n, deg: degree.get(n.id) ?? 0 });
+      } else {
+        const k = n.kind || 'event';
+        kinds.set(k, (kinds.get(k) ?? 0) + 1);
+      }
+    }
+    const entityBuckets = [...buckets.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([bucket, count]) => ({ key: bucket, count, color: entityColors[bucket] ?? entityColors.default }));
+    const eventKinds = [...kinds.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([kind, count]) => ({ key: kind, count, color: kindColors[kind] || EVENT_RING_COLOR }));
+    const topEntities = entities.sort((a, b) => b.deg - a.deg).slice(0, 8).map((e) => e.node);
+    return { entityBuckets, eventKinds, topEntities, total };
+  }, [selectedIds, filteredNodes, degree]);
+
+  // FINALIZE LASSO — translate the drag rectangle into a node selection. Treated
+  // as a real lasso only if it spans > ~4px in BOTH dims; a smaller box is a click,
+  // which clears the selection. For each rendered node with finite graph coords we
+  // map graph→screen via fgRef.graph2ScreenCoords (CANVAS pixels) which line up with
+  // the overlay-local rect coords (the overlay is positioned exactly over the canvas).
+  const finalizeLasso = useCallback(
+    (rect: { x0: number; y0: number; x1: number; y1: number }) => {
+      const minX = Math.min(rect.x0, rect.x1);
+      const maxX = Math.max(rect.x0, rect.x1);
+      const minY = Math.min(rect.y0, rect.y1);
+      const maxY = Math.max(rect.y0, rect.y1);
+      // Tiny box → treat as a click: clear the multi-selection.
+      if (maxX - minX < 4 || maxY - minY < 4) {
+        setSelectedIds((prev) => (prev.size ? new Set() : prev));
+        return;
+      }
+      const fg = fgRef.current;
+      if (!fg || typeof fg.graph2ScreenCoords !== 'function') return;
+      const next = new Set<string>();
+      for (const n of filteredNodes as Array<GraphNode & { x?: number; y?: number }>) {
+        if (typeof n.x !== 'number' || typeof n.y !== 'number' || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
+        const sc = fg.graph2ScreenCoords(n.x, n.y);
+        if (!sc || !Number.isFinite(sc.x) || !Number.isFinite(sc.y)) continue;
+        if (sc.x >= minX && sc.x <= maxX && sc.y >= minY && sc.y <= maxY) next.add(n.id);
+      }
+      setSelectedIds(next);
+    },
+    [filteredNodes],
+  );
+
+  // Pointer handlers for the lasso overlay. Coordinates are OVERLAY-LOCAL (relative
+  // to the overlay's bounding rect = the canvas), which matches graph2ScreenCoords.
+  const lassoLocalPoint = useCallback((e: React.MouseEvent) => {
+    const rect = lassoLayerRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }, []);
+
+  const onLassoMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!lassoMode || e.button !== 0) return;
+      const p = lassoLocalPoint(e);
+      setLassoRect({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+    },
+    [lassoMode, lassoLocalPoint],
+  );
+
+  const onLassoMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!lassoMode) return;
+      setLassoRect((prev) => {
+        if (!prev) return prev;
+        const p = lassoLocalPoint(e);
+        return { ...prev, x1: p.x, y1: p.y };
+      });
+    },
+    [lassoMode, lassoLocalPoint],
+  );
+
+  const finishLassoDrag = useCallback(() => {
+    setLassoRect((prev) => {
+      if (prev) finalizeLasso(prev);
+      return null;
+    });
+  }, [finalizeLasso]);
+
+  // EXPORT the current selection as CSV (client-side Blob download). Columns:
+  // id,type,label,kind_or_entityType,degree. Cells are RFC-4180-escaped: wrapped in
+  // quotes with inner quotes doubled when they contain a comma, quote, or newline.
+  const exportSelectionCsv = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const esc = (v: string | number): string => {
+      const s = String(v ?? '');
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['id', 'type', 'label', 'kind_or_entityType', 'degree'];
+    const rows = [header.join(',')];
+    for (const n of filteredNodes) {
+      if (!selectedIds.has(n.id)) continue;
+      const kindOrType = n.type === 'entity' ? n.entityType ?? '' : n.kind ?? '';
+      rows.push([esc(n.id), esc(n.type), esc(n.label), esc(kindOrType), esc(degree.get(n.id) ?? 0)].join(','));
+    }
+    const blob = new Blob([rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'graph-selection.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [selectedIds, filteredNodes, degree]);
+
+  // Clear the multi-selection (and, by request, drop out of lasso mode).
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setLassoMode(false);
+  }, []);
+
   // SEARCH-TO-CENTER: when the query produces matches, pan the camera to the
   // first match and nudge the zoom in so it's visibly framed. Debounced via the
   // effect dependency on the (memoized) match set so it fires on each new query,
@@ -824,6 +965,88 @@ export default function GraphView() {
             ))}
           </select>
         </div>
+
+        {/* LASSO SELECTION PANEL — only when a multi-selection is active. Shows the
+            count, an entity-bucket + event-kind breakdown, the top entities, and
+            Center / Export CSV / Clear actions. */}
+        {selectedIds.size > 0 && (
+          <div style={{ background: colors.base, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 16, border: `1px solid ${colors.teal}` }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ color: colors.teal }}>⬚</span>
+              {selectionSummary.total} selected
+            </h3>
+
+            {/* Breakdown: entity buckets + event kinds as colored chips with counts. */}
+            {(selectionSummary.entityBuckets.length > 0 || selectionSummary.eventKinds.length > 0) && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
+                {selectionSummary.eventKinds.map((row) => (
+                  <span
+                    key={`sel-k-${row.key}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: colors.text2 }}
+                    title={`${row.count} ${row.key} event${row.count === 1 ? '' : 's'}`}
+                  >
+                    <span style={{ width: 9, height: 9, borderRadius: '50%', border: `2px solid ${row.color}`, background: 'transparent', display: 'inline-block', boxSizing: 'border-box' }} />
+                    {row.key} <span style={{ color: colors.dim }}>{row.count}</span>
+                  </span>
+                ))}
+                {selectionSummary.entityBuckets.map((row) => (
+                  <span
+                    key={`sel-e-${row.key}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: colors.text2 }}
+                    title={`${row.count} ${row.key} entit${row.count === 1 ? 'y' : 'ies'}`}
+                  >
+                    <span style={{ width: 9, height: 9, borderRadius: 2, background: row.color, display: 'inline-block' }} />
+                    {row.key} <span style={{ color: colors.dim }}>{row.count}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Top entities (by degree) — clickable chips that pivot+center. */}
+            {selectionSummary.topEntities.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: colors.dim, marginBottom: 4 }}>Top entities</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {selectionSummary.topEntities.map((n) => (
+                    <button
+                      key={`sel-top-${n.id}`}
+                      onClick={() => pivotTo(n)}
+                      title={`${n.entityType || 'entity'} · deg ${degree.get(n.id) ?? 0}`}
+                      style={chipBtnStyle(entityColor(n.entityType))}
+                    >
+                      <span style={{ color: entityColor(n.entityType) }}>{n.label || n.id}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Actions. */}
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={() => fgRef.current?.zoomToFit(500, 60, (node: any) => selectedIds.has(node.id))}
+                style={{ flex: 1, padding: '6px 8px', borderRadius: 4, border: `1px solid ${colors.border}`, background: colors.panel, color: colors.text, cursor: 'pointer', fontSize: 12 }}
+                title="Fit the selection to view"
+              >
+                ⤢ Center
+              </button>
+              <button
+                onClick={exportSelectionCsv}
+                style={{ flex: 1, padding: '6px 8px', borderRadius: 4, border: `1px solid ${colors.border}`, background: colors.panel, color: colors.text, cursor: 'pointer', fontSize: 12 }}
+                title="Download the selection as CSV"
+              >
+                ⬇ CSV
+              </button>
+              <button
+                onClick={clearSelection}
+                style={{ flex: 1, padding: '6px 8px', borderRadius: 4, border: `1px solid ${colors.border}`, background: colors.panel, color: colors.text, cursor: 'pointer', fontSize: 12 }}
+                title="Clear the selection"
+              >
+                ✕ Clear
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* 006 graph toggles — re-fetch on change via the loadNetwork effect. */}
         <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1145,6 +1368,17 @@ export default function GraphView() {
               >
                 ● {colorByCluster ? 'cluster' : 'type'}
               </button>
+              <span style={toolbarDividerStyle} />
+              <button
+                style={toolbarBtnStyle(lassoMode)}
+                title={lassoMode ? 'Lasso select ON — drag a box to multi-select (click to exit)' : 'Lasso multi-select — drag a box over nodes'}
+                onClick={() => {
+                  setLassoMode((v) => !v);
+                  setLassoRect(null);
+                }}
+              >
+                ⬚ lasso
+              </button>
             </div>
 
             {/* Focus-mode hint, shown while a node is selected. */}
@@ -1285,8 +1519,11 @@ export default function GraphView() {
                     const r = nodeRadius(n);
                     const isMatch = matchIds.has(n.id);
                     const isEntity = n.type === 'entity';
-                    // FOCUS MODE alpha: dim everything outside the 1-hop set.
-                    const dimmed = focusIds ? !focusIds.has(n.id) : false;
+                    const isSelected = selectedIds.has(n.id);
+                    // DIMMING precedence: an active lasso selection dims everything
+                    // NOT selected (overrides single-node focus); otherwise fall back
+                    // to focus-mode's 1-hop dimming.
+                    const dimmed = selectedIds.size > 0 ? !isSelected : focusIds ? !focusIds.has(n.id) : false;
                     const alpha = dimmed ? 0.12 : 1;
                     ctx.globalAlpha = alpha;
 
@@ -1327,6 +1564,18 @@ export default function GraphView() {
                       ctx.strokeStyle = colors.teal;
                       ctx.beginPath();
                       ctx.arc(n.x, n.y, r + 2 / scale, 0, 2 * Math.PI);
+                      ctx.stroke();
+                      ctx.globalAlpha = alpha;
+                    }
+
+                    // LASSO-SELECTED nodes get a bold accent ring (drawn at full
+                    // alpha so the selection pops against the dimmed remainder).
+                    if (isSelected) {
+                      ctx.globalAlpha = 1;
+                      ctx.lineWidth = 2.5 / scale;
+                      ctx.strokeStyle = colors.accent;
+                      ctx.beginPath();
+                      ctx.arc(n.x, n.y, r + 2.5 / scale, 0, 2 * Math.PI);
                       ctx.stroke();
                       ctx.globalAlpha = alpha;
                     }
@@ -1376,6 +1625,40 @@ export default function GraphView() {
                 />
               </ErrorBoundary>
             </Suspense>
+
+            {/* LASSO OVERLAY — absolutely positioned over the canvas only. Inert
+                (pointerEvents:none) unless lassoMode is on, so panning/zooming and
+                node clicks pass straight through to ForceGraph when disarmed. While
+                armed, drag a box; the rectangle is drawn as a child div. */}
+            <div
+              ref={lassoLayerRef}
+              onMouseDown={onLassoMouseDown}
+              onMouseMove={onLassoMouseMove}
+              onMouseUp={finishLassoDrag}
+              onMouseLeave={finishLassoDrag}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 4,
+                cursor: 'crosshair',
+                pointerEvents: lassoMode ? 'auto' : 'none',
+              }}
+            >
+              {lassoRect && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: Math.min(lassoRect.x0, lassoRect.x1),
+                    top: Math.min(lassoRect.y0, lassoRect.y1),
+                    width: Math.abs(lassoRect.x1 - lassoRect.x0),
+                    height: Math.abs(lassoRect.y1 - lassoRect.y0),
+                    border: `1px solid ${colors.teal}`,
+                    background: `rgba(${rgb(colors.teal)}, 0.08)`,
+                    pointerEvents: 'none',
+                  }}
+                />
+              )}
+            </div>
           </>
         )}
       </div>
