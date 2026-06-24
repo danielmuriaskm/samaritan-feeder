@@ -243,6 +243,8 @@ export default function GraphView() {
   const [hideWeak, setHideWeak] = useState(false);
   // Louvain community hulls drawn behind the nodes (cluster structure).
   const [showClusters, setShowClusters] = useState(true);
+  // Color nodes by community instead of by entity type.
+  const [colorByCluster, setColorByCluster] = useState(false);
   // 006 lineage drill-down for the selected EVENT node.
   const [lineage, setLineage] = useState<Lineage | null>(null);
   const [lineageLoading, setLineageLoading] = useState(false);
@@ -471,6 +473,35 @@ export default function GraphView() {
 
   const clusterCount = useMemo(() => new Set(communities.values()).size, [communities]);
 
+  // Per-community info: member count + the top (highest-degree) ENTITY's label —
+  // used for the on-canvas region labels, the cluster legend, and cluster coloring.
+  const communityInfo = useMemo(() => {
+    const size = new Map<number, number>();
+    const best = new Map<number, { label: string; deg: number }>();
+    for (const n of filteredNodes) {
+      const c = communities.get(n.id);
+      if (c == null) continue;
+      size.set(c, (size.get(c) ?? 0) + 1);
+      if (n.type === 'entity') {
+        const deg = degree.get(n.id) ?? 0;
+        const cur = best.get(c);
+        if (!cur || deg > cur.deg) best.set(c, { label: n.label, deg });
+      }
+    }
+    const out = new Map<number, { label: string; size: number }>();
+    for (const [c, s] of size) out.set(c, { label: best.get(c)?.label ?? `cluster ${c}`, size: s });
+    return out;
+  }, [filteredNodes, communities, degree]);
+
+  // Sorted cluster rows for the legend (largest first), each with its hue.
+  const clusterRows = useMemo(
+    () =>
+      [...communityInfo.entries()]
+        .sort((a, b) => b[1].size - a[1].size)
+        .map(([c, info]) => ({ key: info.label, count: info.size, color: clusterColor(c) })),
+    [communityInfo],
+  );
+
   // Fast id lookup so detail-row clicks can decide whether to pivot+center on an
   // in-view node (vs. just selecting an off-graph one).
   const nodeById = useMemo(() => {
@@ -596,8 +627,14 @@ export default function GraphView() {
   }, []);
 
   const nodeFill = useCallback(
-    (n: GraphNode): string => (n.type === 'entity' ? entityColor(n.entityType) : EVENT_RING_COLOR),
-    [],
+    (n: GraphNode): string => {
+      if (colorByCluster) {
+        const c = communities.get(n.id);
+        if (c != null) return clusterColor(c);
+      }
+      return n.type === 'entity' ? entityColor(n.entityType) : EVENT_RING_COLOR;
+    },
+    [colorByCluster, communities],
   );
   // Entities are the structure → larger base (3.5) and filled discs. Events are
   // hollow rings → smaller base (2). Both grow with degree so hubs read.
@@ -705,6 +742,15 @@ export default function GraphView() {
               onChange={(e) => setShowClusters(e.target.checked)}
             />
             <span>Show clusters<span style={{ color: colors.dim }}> (communities)</span></span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', opacity: clusterCount > 0 ? 1 : 0.5 }}>
+            <input
+              type="checkbox"
+              checked={colorByCluster}
+              disabled={clusterCount === 0}
+              onChange={(e) => setColorByCluster(e.target.checked)}
+            />
+            <span>Color by cluster<span style={{ color: colors.dim }}> (vs type)</span></span>
           </label>
         </div>
 
@@ -864,23 +910,39 @@ export default function GraphView() {
             mirroring the canvas shapes. */}
         <div>
           <h4 style={{ margin: '0 0 8px', fontSize: 12, color: colors.dim }}>Legend</h4>
-          {legend.entityRows.length === 0 && legend.eventRows.length === 0 && (
-            <div style={{ fontSize: 11, color: colors.muted }}>no nodes in view</div>
+          {colorByCluster ? (
+            clusterRows.length === 0 ? (
+              <div style={{ fontSize: 11, color: colors.muted }}>no clusters in view</div>
+            ) : (
+              clusterRows.slice(0, 12).map((row) => (
+                <div key={`c-${row.key}`} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }} title={row.key}>
+                  <span style={{ width: 10, height: 10, borderRadius: 2, background: row.color, display: 'inline-block' }} />
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.key}</span>
+                  <span style={{ color: colors.dim }}>{row.count}</span>
+                </div>
+              ))
+            )
+          ) : (
+            <>
+              {legend.entityRows.length === 0 && legend.eventRows.length === 0 && (
+                <div style={{ fontSize: 11, color: colors.muted }}>no nodes in view</div>
+              )}
+              {legend.eventRows.map((row) => (
+                <div key={`k-${row.key}`} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: '50%', border: `2px solid ${row.color}`, background: 'transparent', display: 'inline-block', boxSizing: 'border-box' }} />
+                  <span style={{ flex: 1 }}>{row.key}</span>
+                  <span style={{ color: colors.dim }}>{row.count}</span>
+                </div>
+              ))}
+              {legend.entityRows.map((row) => (
+                <div key={`e-${row.key}`} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 2, background: row.color, display: 'inline-block' }} />
+                  <span style={{ flex: 1 }}>{row.key}</span>
+                  <span style={{ color: colors.dim }}>{row.count}</span>
+                </div>
+              ))}
+            </>
           )}
-          {legend.eventRows.map((row) => (
-            <div key={`k-${row.key}`} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', border: `2px solid ${row.color}`, background: 'transparent', display: 'inline-block', boxSizing: 'border-box' }} />
-              <span style={{ flex: 1 }}>{row.key}</span>
-              <span style={{ color: colors.dim }}>{row.count}</span>
-            </div>
-          ))}
-          {legend.entityRows.map((row) => (
-            <div key={`e-${row.key}`} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 2, background: row.color, display: 'inline-block' }} />
-              <span style={{ flex: 1 }}>{row.key}</span>
-              <span style={{ color: colors.dim }}>{row.count}</span>
-            </div>
-          ))}
         </div>
       </div>
 
@@ -999,7 +1061,7 @@ export default function GraphView() {
                   // community, drawn BEHIND the nodes. Nodes keep type colors; the
                   // hull just shows "these belong together". Communities with < 3
                   // visible members are skipped so it doesn't clutter.
-                  onRenderFramePre={(ctx: CanvasRenderingContext2D) => {
+                  onRenderFramePre={(ctx: CanvasRenderingContext2D, gscale: number) => {
                     if (!showClusters || communities.size === 0) return;
                     const byComm = new Map<number, Array<{ x: number; y: number }>>();
                     for (const n of graphData.nodes as Array<{ id: string; x?: number; y?: number }>) {
@@ -1035,6 +1097,22 @@ export default function GraphView() {
                       ctx.strokeStyle = `rgba(${rgb(col)}, 0.28)`;
                       ctx.lineWidth = 1.2;
                       ctx.stroke();
+                      // Region label = the community's top entity, above the hull.
+                      const info = communityInfo.get(c);
+                      if (info) {
+                        const minY = Math.min(...pts.map((p) => p.y));
+                        const fontSize = Math.max(3, 13 / gscale);
+                        const text = info.label.length > 24 ? `${info.label.slice(0, 23)}…` : info.label;
+                        ctx.font = `600 ${fontSize}px sans-serif`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'bottom';
+                        ctx.lineJoin = 'round';
+                        ctx.lineWidth = Math.max(1.2, 3 / gscale);
+                        ctx.strokeStyle = `rgba(${rgb(colors.base)}, 0.9)`;
+                        ctx.strokeText(text, cx, minY - PAD - fontSize * 0.4);
+                        ctx.fillStyle = `rgba(${rgb(col)}, 0.92)`;
+                        ctx.fillText(text, cx, minY - PAD - fontSize * 0.4);
+                      }
                     }
                     ctx.restore();
                   }}
