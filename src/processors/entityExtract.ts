@@ -26,6 +26,48 @@ export type EntityType =
   | 'pgp_key'
   | 'url';
 
+// ---------------------------------------------------------------------------
+// Entity quality gate (graph readability). Structured IOC-ish types are ALWAYS
+// meaningful; only the free-form types (org/person/place/keyword and any
+// LLM-supplied label) get filtered. Drops ultra-short ("ai", "ml", "os"),
+// pure-numeric, and a small curated list of generic buzzwords that otherwise
+// become huge low-signal hubs in the intelligence graph.
+// ---------------------------------------------------------------------------
+const STRUCTURED_ENTITY_TYPES = new Set<string>([
+  'ipv4', 'ipv6', 'domain', 'email', 'hash_md5', 'hash_sha1', 'hash_sha256',
+  'hash_sha512', 'cve', 'asn', 'btc_address', 'eth_address', 'iban', 'credit_card',
+  'analytics_id', 'pgp_key', 'url',
+]);
+
+const ENTITY_STOPWORDS = new Set<string>([
+  // generic tech / product buzzwords
+  'ai', 'ml', 'llm', 'llms', 'genai', 'api', 'apis', 'app', 'apps', 'ui', 'ux',
+  'os', 'iot', 'gpu', 'cpu', 'sdk', 'cli', 'saas', 'web', 'site', 'blog', 'post',
+  'tech', 'code', 'data', 'cloud', 'model', 'models', 'chip', 'chips', 'devops',
+  // generic news / filler
+  'the', 'new', 'news', 'open', 'show', 'update', 'updates', 'today', 'report',
+  'reports', 'plan', 'plans', 'price', 'prices', 'team', 'user', 'users', 'people',
+  'company', 'startup', 'startups', 'product', 'service', 'services',
+  // org/title filler
+  'inc', 'llc', 'ltd', 'corp', 'co', 'group', 'ceo', 'cto', 'cfo', 'gov',
+  // ranking filler
+  'one', 'two', 'first', 'best', 'top', 'big', 'more', 'most', 'new',
+]);
+
+/**
+ * True when an entity is too generic to be worth a graph node. Never filters the
+ * structured IOC types. Used at link time (store/entities) and at graph read time
+ * (routes/graph) so noisy hubs like "ai"/"data" don't dominate the layout.
+ */
+export function isLowValueEntity(type: string, value: string): boolean {
+  if (STRUCTURED_ENTITY_TYPES.has(type)) return false;
+  const v = value.trim().toLowerCase();
+  if (v.length < 3) return true;
+  if (/^\d+$/.test(v)) return true;
+  if (ENTITY_STOPWORDS.has(v)) return true;
+  return false;
+}
+
 // Validators and several patterns below are clean-room ports of the *ideas* in
 // SpiderFoot (smicallef/spiderfoot, MIT) — helpers.py (extractIbansFromText,
 // extractCreditCardsFromText, extractPgpKeysFromText, extractUrlsFromText,
