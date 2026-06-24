@@ -8,15 +8,17 @@
 // chunk). The hexes here MUST mirror the `:root` block in theme.css.
 
 export const colors = {
-  // surfaces
-  base: '#0a0a0a',
-  bg2: '#111111',
-  panel: '#141414',
-  hover: '#1e1e1e',
+  // surfaces + lines: adopted from Liam ERD's dark tokens (github.com/liam-hq/liam,
+  // Apache-2.0, © 2024 ROUTE06, Inc. — see web/NOTICE). Surface LANGUAGE only;
+  // the neon semantics + text below stay the feeder's own. MIRROR theme.css.
+  base: '#141616',
+  bg2: '#1b1d1d',
+  panel: '#232526',
+  hover: '#2e3031',
   // lines
-  border: '#2a2a2a',
-  borderStrong: '#444444',
-  borderSubtle: '#1a1a1a',
+  border: '#383a3b',
+  borderStrong: '#5f6366',
+  borderSubtle: '#2a2c2c',
   // text
   text: '#e8e8e8',
   text2: '#cccccc',

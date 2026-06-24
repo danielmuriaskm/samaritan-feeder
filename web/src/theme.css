@@ -4,15 +4,20 @@
  * inline-override rule (theme.ts tokens) handles per-row computed colors. */
 
 :root {
-  /* surfaces */
-  --wm-base: #0a0a0a;
-  --wm-bg2: #111111;
-  --wm-panel: #141414;
-  --wm-hover: #1e1e1e;
+  /* surfaces + lines: adopted from Liam ERD's dark design tokens
+   * (github.com/liam-hq/liam, packages/ui/src/styles/Dark/variables.css,
+   * Apache-2.0, © 2024 ROUTE06, Inc. — see web/NOTICE). We take Liam's surface
+   * LANGUAGE (slightly-lighter, faintly green-tinted dark grays) to unify the
+   * console's look with Liam / the Samaritan web UI, while KEEPING the feeder's
+   * own neon semantic colors + text below. Mirror any change in theme.ts. */
+  --wm-base: #141616; /* Liam --global-background / gray-1000 */
+  --wm-bg2: #1b1d1d;
+  --wm-panel: #232526; /* Liam --pane-background / gray-900 */
+  --wm-hover: #2e3031; /* Liam --pane-muted-background / gray-800 */
   /* lines */
-  --wm-border: #2a2a2a;
-  --wm-border-strong: #444444;
-  --wm-border-subtle: #1a1a1a;
+  --wm-border: #383a3b; /* Liam --global-border / --pane-border */
+  --wm-border-strong: #5f6366; /* Liam --pane-border-hover */
+  --wm-border-subtle: #2a2c2c;
   /* text */
   --wm-text: #e8e8e8;
   --wm-text-2: #cccccc;

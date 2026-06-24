@@ -1,0 +1,15 @@
+samaritan-feeder operator console
+Copyright (c) Samaritan / Daniel Murias — MIT (see repository LICENSE)
+
+This product's dark theme adopts surface/border color tokens from:
+
+  Liam ERD
+  https://github.com/liam-hq/liam
+  Copyright (c) 2024 ROUTE06, Inc.
+  Licensed under the Apache License, Version 2.0.
+
+Specifically, the dark surface/line palette in web/src/theme.css and
+web/src/lib/theme.ts is derived from Liam's design tokens
+(frontend/packages/ui/src/styles/Dark/variables.css). No Liam source code is
+included; the values were adopted to unify the console's look. The Apache-2.0
+license is available at https://www.apache.org/licenses/LICENSE-2.0
