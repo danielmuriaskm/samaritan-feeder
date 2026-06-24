@@ -492,7 +492,7 @@ async function runCleanup(): Promise<void> {
 
   // Also clean raw data older than 7 days
   const rawBefore = Date.now() - config.RAW_DATA_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  const { exec } = await import('./db.js');
+  const { exec, query } = await import('./db.js');
   await exec(
     `UPDATE intelligence_events SET raw_data = NULL WHERE created_at < $1`,
     [rawBefore],
@@ -501,6 +501,16 @@ async function runCleanup(): Promise<void> {
   // 006: purge orphaned lineage edges past retention + expired signal mutes.
   await exec(`DELETE FROM event_lineage WHERE created_at < $1`, [before]);
   await exec(`DELETE FROM signal_mutes WHERE muted_until IS NOT NULL AND muted_until < $1`, [Date.now()]);
+
+  // 006: signals are transient correlation alerts — keep a shorter (14d) window
+  // than events so the Signals view doesn't accumulate stale silent/anomaly noise.
+  const signalBefore = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  const sigResult = await query<{ count: string }>(
+    `WITH d AS (DELETE FROM intelligence_signals WHERE created_at < $1 RETURNING 1) SELECT COUNT(*)::text AS count FROM d`,
+    [signalBefore],
+  );
+  const purgedSignals = Number(sigResult[0]?.count ?? 0);
+  if (purgedSignals > 0) console.log(`[scheduler] Purged ${purgedSignals} old signals (>14d)`);
 
   // Purge any REDACTED CV best-frames at the same 7-day window (keeps the
   // anonymity argument real: imagery gone, aggregate rows survive to 30d and

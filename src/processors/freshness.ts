@@ -309,7 +309,13 @@ async function sweepSource(
   const dayAgo = now - DAY_MS;
 
   // --- silent-source signal ---
-  if (silent) {
+  // Only fire when the source TRANSITIONS into silent (its prior persisted state
+  // was not already 'silent'). A permanently-dead feed (e.g. a Reddit subreddit
+  // 403-blocked from this datacenter IP for weeks) would otherwise re-emit a
+  // silent signal every day and flood the Signals view; now it fires once per
+  // silent episode. `source.healthState` is the pre-sweep state — setHealthState
+  // above writes the DB but not this local copy, so this read is the old value.
+  if (silent && source.healthState !== 'silent') {
     const dedupeKey = `silent_source:${source.id}`;
     if (!(await isSuppressed(dedupeKey, dayAgo, now))) {
       const idleMs = source.lastEventAt != null ? now - source.lastEventAt : undefined;
