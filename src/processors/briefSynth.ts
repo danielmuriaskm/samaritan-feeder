@@ -125,15 +125,19 @@ const DEDUP_CONTENT_CHARS = 160;
  * a function of the event's own fields → deterministic.
  */
 function dedupKeyOf(e: IntelligenceEvent): string {
-  const cid = clusterIdOf(e);
-  if (cid) return `c:${cid}`;
   const title = normalizeForKey(e.title ?? '');
   // Templated-feed alerts/anomalies (NWS, GDACS, USGS, …) re-issue the SAME
-  // headline for many areas / repeat updates. In a top-level digest those collapse
-  // to ONE representative by title alone — the lead's "+N more" already conveys the
-  // count, so we don't show "NWS Severe Fire Weather Watch" three times. Free-form
-  // text / social keep the content signature so genuinely distinct posts don't fuse.
+  // headline for many areas / repeat updates (e.g. "NWS Severe Fire Weather Watch"
+  // for a dozen counties). In a top-level digest those collapse to ONE
+  // representative by title alone — the lead's "+N more" conveys the count.
+  //
+  // This MUST take precedence over the cluster tag: nlpCluster often splits the
+  // area-variants of one alert headline into DIFFERENT clusters (their embeddings
+  // differ by location), so checking cluster_id first would leak the duplicates
+  // back through. So collapse templated alerts by title BEFORE the cluster key.
   if ((e.kind === 'alert' || e.kind === 'anomaly') && title) return `a:${e.kind} ${title}`;
+  const cid = clusterIdOf(e);
+  if (cid) return `c:${cid}`;
   const content = normalizeForKey(e.content ?? '').slice(0, DEDUP_CONTENT_CHARS);
   // No cluster tag and no title/content text: nothing real to match on.
   // Treat as a singleton (unique event id) so unrelated empties never fuse.
