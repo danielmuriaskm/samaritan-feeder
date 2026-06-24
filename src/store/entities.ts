@@ -228,7 +228,7 @@ function generateEntityId(): string {
   return `ent_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function guessEntityType(value: string): ExtractedEntity['type'] {
+export function guessEntityType(value: string): ExtractedEntity['type'] {
   const raw = value.trim();
   const v = raw.toLowerCase();
   if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v)) return 'ipv4';
@@ -263,7 +263,7 @@ function guessEntityType(value: string): ExtractedEntity['type'] {
  * synonym-mapped to org/person/place/product/tech; anything unrecognized falls
  * back to value-based guessEntityType (which now defaults to 'org').
  */
-function normalizeEntityType(rawType: unknown, value: string): ExtractedEntity['type'] {
+export function normalizeEntityType(rawType: unknown, value: string): ExtractedEntity['type'] {
   const t = String(rawType ?? '').toLowerCase().trim();
   const structured = new Set([
     'ipv4', 'ipv6', 'domain', 'email', 'hash_md5', 'hash_sha1', 'hash_sha256', 'hash_sha512',
@@ -275,7 +275,7 @@ function normalizeEntityType(rawType: unknown, value: string): ExtractedEntity['
   if (['org', 'organization', 'organisation', 'company', 'corporation', 'agency', 'government', 'institution', 'team', 'startup', 'brand'].includes(t)) return 'org';
   if (['person', 'people', 'individual', 'name', 'author', 'user'].includes(t)) return 'person';
   if (['place', 'location', 'country', 'city', 'region', 'gpe', 'geo', 'area'].includes(t)) return 'place';
-  if (['product', 'app', 'application', 'service', 'model', 'tool', 'platform', 'device'].includes(t)) return 'product';
+  if (['product', 'app', 'application', 'software', 'service', 'model', 'tool', 'platform', 'device'].includes(t)) return 'product';
   if (['tech', 'technology', 'framework', 'language', 'protocol', 'library', 'standard', 'concept', 'topic', 'keyword'].includes(t)) return 'tech';
   return guessEntityType(value);
 }
