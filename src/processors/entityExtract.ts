@@ -24,7 +24,15 @@ export type EntityType =
   | 'credit_card'
   | 'analytics_id'
   | 'pgp_key'
-  | 'url';
+  | 'url'
+  // Free-form semantic types (LLM-supplied, normalized in store/entities). The
+  // regex extractor never emits these; they're the honest superset of what the
+  // typed-entity path writes to intelligence_entities, and drive graph node color.
+  | 'org'
+  | 'person'
+  | 'place'
+  | 'product'
+  | 'tech';
 
 // ---------------------------------------------------------------------------
 // Entity quality gate (graph readability). Structured IOC-ish types are ALWAYS

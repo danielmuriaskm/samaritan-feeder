@@ -83,6 +83,9 @@ export const entityColors: Record<string, string> = {
   cve: colors.high,
   org: colors.teal,
   person: colors.pink,
+  place: colors.elevated,
+  product: colors.purple,
+  tech: colors.live,
   event: colors.dim,
   default: colors.dim,
 };

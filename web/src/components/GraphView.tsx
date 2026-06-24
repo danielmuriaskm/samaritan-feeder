@@ -1,6 +1,11 @@
 import React, { useEffect, useState, useCallback, useMemo, Suspense, lazy, useRef } from 'react';
 import { colors, kindColors, entityColors, rgb } from '../lib/theme.js';
-import { getGraphNetwork, getLineage, graphExportUrl, type GraphOpts, type LineageNeighbor } from '../lib/api.js';
+import {
+  getGraphNetwork, getLineage, getGraphEntity, getGraphEvent, graphExportUrl,
+  type GraphOpts, type LineageNeighbor,
+  type GraphEntity, type GraphEntityEvent, type GraphRelatedEntity, type GraphEventEntity,
+} from '../lib/api.js';
+import type { IntelEvent } from '../lib/types.js';
 
 const ForceGraph2D = lazy(() => import('react-force-graph-2d'));
 
@@ -28,20 +33,85 @@ interface Lineage {
   children: LineageNeighbor[];
 }
 
+// Detail payloads for the selected-node drill-down (006). Entity = its events +
+// co-occurring entities; Event = its extracted entities (+ events we don't render
+// here since the existing Lineage panel covers event→event provenance).
+interface EntityDetail {
+  entity: GraphEntity;
+  events: GraphEntityEvent[];
+  relatedEntities: GraphRelatedEntity[];
+}
+interface EventDetail {
+  event: IntelEvent;
+  entities: GraphEventEntity[];
+  relatedEvents: IntelEvent[];
+}
+
+// Canonical bucket names — the SINGLE source of truth shared by node coloring and
+// the legend so a node's disc and its legend swatch can never diverge.
+type EntityBucket =
+  | 'org' | 'person' | 'place' | 'product' | 'tech'
+  | 'ip' | 'domain' | 'email' | 'hash' | 'cve' | 'url' | 'default';
+
 // Normalize the API's granular entityType keys (ipv4, hash_md5, btc_address, …)
 // down to the canonical buckets in theme.ts `entityColors`. Pure presentation —
-// no data/state is mutated.
-function entityColor(entityType: string | undefined): string {
+// no data/state is mutated. Used by BOTH entityColor() and the legend tally.
+function entityBucket(entityType: string | undefined): EntityBucket {
   const t = (entityType ?? '').toLowerCase();
-  if (t.startsWith('ip')) return entityColors.ip;
-  if (t.startsWith('hash')) return entityColors.hash;
-  if (t === 'domain') return entityColors.domain;
-  if (t === 'email') return entityColors.email;
-  if (t === 'cve') return entityColors.cve;
-  if (t === 'url') return entityColors.url;
-  if (t === 'org' || t === 'asn') return entityColors.org;
-  if (t === 'person') return entityColors.person;
-  return entityColors[t] ?? entityColors.default;
+  if (t.startsWith('ip')) return 'ip';
+  if (t.startsWith('hash')) return 'hash';
+  if (t === 'domain') return 'domain';
+  if (t === 'email') return 'email';
+  if (t === 'cve') return 'cve';
+  if (t === 'url') return 'url';
+  if (t === 'org' || t === 'asn') return 'org';
+  if (t === 'person') return 'person';
+  if (t === 'place') return 'place';
+  if (t === 'product') return 'product';
+  if (t === 'tech') return 'tech';
+  // Backend typing now produces these buckets directly; fall back if a raw key
+  // happens to match a theme entry, else `default`.
+  if (entityColors[t]) return t as EntityBucket;
+  return 'default';
+}
+
+function entityColor(entityType: string | undefined): string {
+  return entityColors[entityBucket(entityType)] ?? entityColors.default;
+}
+
+// Event nodes are drawn as hollow rings; a deliberate desaturated slate reads far
+// better than the low-contrast colors.dim (#888) over the near-black canvas.
+const EVENT_RING_COLOR = '#5a6b7a';
+
+// Escape free LLM/user text before injecting into the nodeLabel HTML tooltip.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Compact "x ago" / "in x" relative time for detail rows. Defensive about
+// epoch units: treat values < 1e12 as seconds.
+function relTime(ts: number | undefined): string {
+  if (!ts || !Number.isFinite(ts)) return '';
+  const ms = ts < 1e12 ? ts * 1000 : ts;
+  const diff = Date.now() - ms;
+  const abs = Math.abs(diff);
+  const mins = Math.round(abs / 60000);
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${diff < 0 ? 'in ' : ''}${mins}m${diff < 0 ? '' : ' ago'}`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${diff < 0 ? 'in ' : ''}${hrs}h${diff < 0 ? '' : ' ago'}`;
+  const days = Math.round(hrs / 24);
+  return `${diff < 0 ? 'in ' : ''}${days}d${diff < 0 ? '' : ' ago'}`;
+}
+
+function fmtDate(ts: number | undefined): string {
+  if (!ts || !Number.isFinite(ts)) return '—';
+  const ms = ts < 1e12 ? ts * 1000 : ts;
+  return new Date(ms).toLocaleString();
 }
 
 function GraphFallback() {
@@ -139,6 +209,11 @@ export default function GraphView() {
   // 006 lineage drill-down for the selected EVENT node.
   const [lineage, setLineage] = useState<Lineage | null>(null);
   const [lineageLoading, setLineageLoading] = useState(false);
+  // 006 node drill-down — entity stats/events/related, and event extracted entities.
+  const [entityDetail, setEntityDetail] = useState<EntityDetail | null>(null);
+  const [entityDetailLoading, setEntityDetailLoading] = useState(false);
+  const [eventDetail, setEventDetail] = useState<EventDetail | null>(null);
+  const [eventDetailLoading, setEventDetailLoading] = useState(false);
   const fgRef = useRef<any>(null);
 
   // Current export/fetch options derived from the toggles.
@@ -198,6 +273,60 @@ export default function GraphView() {
     };
   }, [selectedNode]);
 
+  // Entity drill-down — stats + connected events + co-occurring entities. Mirrors
+  // the lineage effect's cancelled/try-catch pattern; guarded on entity nodes.
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedNode || selectedNode.type !== 'entity') {
+      setEntityDetail(null);
+      setEntityDetailLoading(false);
+      return;
+    }
+    setEntityDetail(null);
+    setEntityDetailLoading(true);
+    (async () => {
+      try {
+        const res = await getGraphEntity(selectedNode.id);
+        if (!cancelled) setEntityDetail(res);
+      } catch (err) {
+        console.error('Failed to load entity detail:', err);
+        if (!cancelled) setEntityDetail(null);
+      } finally {
+        if (!cancelled) setEntityDetailLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedNode]);
+
+  // Event drill-down — the extracted entities behind an event node (rendered ABOVE
+  // the existing event→event Lineage panel). Same cancelled/try-catch pattern.
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedNode || selectedNode.type !== 'event') {
+      setEventDetail(null);
+      setEventDetailLoading(false);
+      return;
+    }
+    setEventDetail(null);
+    setEventDetailLoading(true);
+    (async () => {
+      try {
+        const res = await getGraphEvent(selectedNode.id);
+        if (!cancelled) setEventDetail(res);
+      } catch (err) {
+        console.error('Failed to load event detail:', err);
+        if (!cancelled) setEventDetail(null);
+      } finally {
+        if (!cancelled) setEventDetailLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedNode]);
+
   // react-force-graph-2d MUTATES the links array in place, replacing each link's
   // `source`/`target` string id with the resolved node OBJECT after the first
   // render. A naive `nodeIds.has(l.source)` then fails on every subsequent render
@@ -205,6 +334,11 @@ export default function GraphView() {
   // that's the "Links: 0 / no edges" bug. Extract the id from either shape.
   const linkEndId = (e: unknown): string =>
     e && typeof e === 'object' ? String((e as { id: unknown }).id) : String(e);
+
+  // A link is lineage (event→event provenance) when the backend stamps confidence
+  // 1 (parent→child). Drives teal styling, curvature, particles + arrowheads, and
+  // the d3 link distance below.
+  const isLineage = (l: { confidence?: number }): boolean => (l.confidence ?? 0) >= 0.999;
 
   // Build the rendered node/link set in three passes:
   //   1. entity-type filter (search no longer filters — it highlights + centers).
@@ -278,6 +412,41 @@ export default function GraphView() {
     return d;
   }, [filteredLinks]);
 
+  // Fast id lookup so detail-row clicks can decide whether to pivot+center on an
+  // in-view node (vs. just selecting an off-graph one).
+  const nodeById = useMemo(() => {
+    const m = new Map<string, GraphNode & { x?: number; y?: number }>();
+    for (const n of filteredNodes) m.set(n.id, n as GraphNode & { x?: number; y?: number });
+    return m;
+  }, [filteredNodes]);
+
+  // DATA-DRIVEN LEGEND — tally entity buckets + event kinds actually present in
+  // the rendered set so the legend reflects the view, not the theme's full map.
+  // Entity buckets reuse entityBucket()→entityColors, the SAME mapping the canvas
+  // uses, so swatch color == node color by construction.
+  const legend = useMemo(() => {
+    const buckets = new Map<EntityBucket, number>();
+    const kinds = new Map<string, number>();
+    for (const n of filteredNodes) {
+      if (n.type === 'entity') {
+        const b = entityBucket(n.entityType);
+        buckets.set(b, (buckets.get(b) ?? 0) + 1);
+      } else {
+        const k = n.kind || 'event';
+        kinds.set(k, (kinds.get(k) ?? 0) + 1);
+      }
+    }
+    const entityRows = [...buckets.entries()]
+      .filter(([, c]) => c > 0)
+      .sort((a, b) => b[1] - a[1])
+      .map(([bucket, count]) => ({ key: bucket, count, color: entityColors[bucket] ?? entityColors.default }));
+    const eventRows = [...kinds.entries()]
+      .filter(([, c]) => c > 0)
+      .sort((a, b) => b[1] - a[1])
+      .map(([kind, count]) => ({ key: kind, count, color: kindColors[kind] || EVENT_RING_COLOR }));
+    return { entityRows, eventRows };
+  }, [filteredNodes]);
+
   // Search no longer prunes the graph — it highlights matching nodes (ring) and
   // centers the view on the first match. Empty query = no matches highlighted.
   const matchIds = useMemo(() => {
@@ -320,6 +489,44 @@ export default function GraphView() {
     return () => clearTimeout(t);
   }, [matchIds, filteredNodes]);
 
+  // LAYOUT — tune d3 forces for separation once the engine + data exist. Stronger
+  // charge with a capped distanceMax keeps it from exploding; shorter link
+  // distances for lineage edges keep provenance chains tight; a collide force
+  // (sized off nodeRadius) stops disc overlap. Reheat so the new forces take.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || typeof fg.d3Force !== 'function') return;
+    if (!graphData.nodes.length) return;
+
+    fg.d3Force('charge')?.strength(-90).distanceMax(380);
+    fg.d3Force('link')
+      ?.distance((l: any) => (isLineage(l) ? 26 : 40))
+      .strength(0.7);
+
+    // Collide force: react-force-graph re-exports d3-force on the component
+    // constructor (ForceGraphMethods) but NOT on the instance, so the safe,
+    // dependency-free way to get forceCollide is the d3-force-3d module the
+    // library already bundles. We avoid a hard top-level import (which would
+    // bloat the eager bundle and risk a missing-dep build break) by attempting
+    // a couple of access paths and degrading gracefully: if none resolve we
+    // still rely on the increased charge + nodeRelSize for visual separation.
+    try {
+      const ctor: any = fg.constructor;
+      const collideFactory =
+        ctor?.forceCollide || (typeof window !== 'undefined' && (window as any).d3?.forceCollide);
+      if (typeof collideFactory === 'function') {
+        fg.d3Force('collide', collideFactory((n: any) => nodeRadius(n) + 2).strength(0.85));
+      }
+    } catch (err) {
+      // Non-fatal — separation still comes from charge/link distance.
+      console.debug('collide force unavailable:', err);
+    }
+
+    fg.d3ReheatSimulation?.();
+    // nodeRadius is stable-ish (depends on degree); re-run when the data changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphData]);
+
   // Zoom controls wired to the imperative ForceGraph handle.
   const zoomFit = useCallback(() => fgRef.current?.zoomToFit(400, 60), []);
   const zoomBy = useCallback((factor: number) => {
@@ -330,19 +537,37 @@ export default function GraphView() {
   }, []);
 
   const nodeFill = useCallback(
-    (n: GraphNode): string => (n.type === 'entity' ? entityColor(n.entityType) : kindColors[n.kind || ''] || colors.dim),
+    (n: GraphNode): string => (n.type === 'entity' ? entityColor(n.entityType) : EVENT_RING_COLOR),
     [],
   );
+  // Entities are the structure → larger base (3.5) and filled discs. Events are
+  // hollow rings → smaller base (2). Both grow with degree so hubs read.
   const nodeRadius = useCallback(
-    (n: GraphNode): number => (n.type === 'event' ? 3 : 2.5) + Math.min(6, Math.sqrt(degree.get(n.id) ?? 0)),
+    (n: GraphNode): number => (n.type === 'entity' ? 3.5 : 2) + Math.min(6, Math.sqrt(degree.get(n.id) ?? 0)),
     [degree],
+  );
+
+  // Pivot the selection to another node (detail-row click). If it's in the
+  // current view, center the camera on it; otherwise just select it.
+  const pivotTo = useCallback(
+    (node: GraphNode) => {
+      setSelectedNode(node);
+      const inView = nodeById.get(node.id);
+      if (inView && typeof inView.x === 'number' && typeof inView.y === 'number') {
+        fgRef.current?.centerAt(inView.x, inView.y, 600);
+        fgRef.current?.zoom(Math.max(2.4, fgRef.current.zoom?.() ?? 1), 600);
+      }
+    },
+    [nodeById],
   );
 
   const hasData = !loading && filteredNodes.length > 0;
   const isEmpty = !loading && filteredNodes.length === 0 && !error;
 
   const selectedIsEvent = selectedNode?.type === 'event';
+  const selectedIsEntity = selectedNode?.type === 'entity';
   const hasLineage = !!lineage && (lineage.parents.length > 0 || lineage.children.length > 0);
+  const selectedDegree = selectedNode ? degree.get(selectedNode.id) ?? 0 : 0;
 
   return (
     <div style={{ display: 'flex', height: '100%', background: colors.base }}>
@@ -469,6 +694,7 @@ export default function GraphView() {
           <div style={{ background: colors.base, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 16, border: `1px solid ${colors.border}` }}>
             <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>
               {selectedNode.type === 'event' ? '📄 Event' : '🔖 Entity'}
+              <span style={{ color: colors.dim, fontWeight: 400 }}> · deg {selectedDegree}</span>
             </h3>
             <p style={{ margin: '4px 0', wordBreak: 'break-all' }}><strong>ID:</strong> {selectedNode.id}</p>
             <p style={{ margin: '4px 0' }}><strong>Label:</strong> {selectedNode.label}</p>
@@ -483,6 +709,68 @@ export default function GraphView() {
                 <strong>Type:</strong>{' '}
                 <span style={{ color: entityColor(selectedNode.entityType) }}>{selectedNode.entityType}</span>
               </p>
+            )}
+
+            {/* ENTITY drill-down — stats, connected events, co-occurring entities. */}
+            {selectedIsEntity && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
+                {entityDetailLoading ? (
+                  <div style={{ fontSize: 12, color: colors.dim }}>Loading entity…</div>
+                ) : entityDetail ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <EntityStats detail={entityDetail} />
+                    <DetailGroup title="Events" count={entityDetail.events.length}>
+                      {entityDetail.events.map((ev) => (
+                        <EventRow
+                          key={ev.eventId}
+                          ev={ev}
+                          onClick={() =>
+                            pivotTo({ id: ev.eventId, type: 'event', label: ev.title || ev.eventId, kind: undefined })
+                          }
+                        />
+                      ))}
+                    </DetailGroup>
+                    <DetailGroup title="Related entities" count={entityDetail.relatedEntities.length}>
+                      {entityDetail.relatedEntities.map((re) => (
+                        <RelatedEntityRow
+                          key={re.id}
+                          re={re}
+                          onClick={() =>
+                            pivotTo({ id: re.id, type: 'entity', label: re.value || re.id, entityType: re.type })
+                          }
+                        />
+                      ))}
+                    </DetailGroup>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: colors.muted }}>no detail</div>
+                )}
+              </div>
+            )}
+
+            {/* EVENT drill-down — extracted entities (above the lineage panel). */}
+            {selectedIsEvent && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
+                <h4 style={{ margin: '0 0 6px', fontSize: 12, color: colors.dim }}>Entities</h4>
+                {eventDetailLoading ? (
+                  <div style={{ fontSize: 12, color: colors.dim }}>Loading entities…</div>
+                ) : eventDetail && eventDetail.entities.length > 0 ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {eventDetail.entities.map((en) => (
+                      <button
+                        key={en.id}
+                        onClick={() => pivotTo({ id: en.id, type: 'entity', label: en.value || en.id, entityType: en.type })}
+                        title={en.context || `${en.type} · ${en.value}`}
+                        style={chipBtnStyle(entityColor(en.type))}
+                      >
+                        <span style={{ color: entityColor(en.type) }}>{en.value || en.id}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: colors.muted }}>no entities</div>
+                )}
+              </div>
             )}
 
             {/* 006 lineage drill-down — only meaningful for event nodes. */}
@@ -501,18 +789,26 @@ export default function GraphView() {
           </div>
         )}
 
+        {/* DATA-DRIVEN LEGEND — only buckets/kinds present in the rendered view,
+            with live counts. Entity swatch = square disc; event swatch = ring,
+            mirroring the canvas shapes. */}
         <div>
           <h4 style={{ margin: '0 0 8px', fontSize: 12, color: colors.dim }}>Legend</h4>
-          {Object.entries(kindColors).map(([kind, color]) => (
-            <div key={kind} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block' }} />
-              {kind}
+          {legend.entityRows.length === 0 && legend.eventRows.length === 0 && (
+            <div style={{ fontSize: 11, color: colors.muted }}>no nodes in view</div>
+          )}
+          {legend.eventRows.map((row) => (
+            <div key={`k-${row.key}`} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
+              <span style={{ width: 10, height: 10, borderRadius: '50%', border: `2px solid ${row.color}`, background: 'transparent', display: 'inline-block', boxSizing: 'border-box' }} />
+              <span style={{ flex: 1 }}>{row.key}</span>
+              <span style={{ color: colors.dim }}>{row.count}</span>
             </div>
           ))}
-          {Object.entries(entityColors).map(([type, color]) => (
-            <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 2, background: color, display: 'inline-block' }} />
-              {type}
+          {legend.entityRows.map((row) => (
+            <div key={`e-${row.key}`} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: row.color, display: 'inline-block' }} />
+              <span style={{ flex: 1 }}>{row.key}</span>
+              <span style={{ color: colors.dim }}>{row.count}</span>
             </div>
           ))}
         </div>
@@ -573,20 +869,61 @@ export default function GraphView() {
                 <ForceGraph2D
                   ref={fgRef}
                   graphData={graphData}
-                  nodeLabel="label"
+                  nodeRelSize={4}
+                  d3VelocityDecay={0.3}
+                  // HOVER TOOLTIP — HTML string. Label is free LLM text → escape
+                  // &<>". A colored type/kind chip + degree (+ event count for
+                  // entities) gives at-a-glance context without extra state.
+                  nodeLabel={(n: any) => {
+                    const deg = degree.get(n.id) ?? 0;
+                    const safeLabel = escapeHtml(n.label ?? n.id);
+                    if (n.type === 'entity') {
+                      const c = entityColor(n.entityType);
+                      const chip = escapeHtml(n.entityType || 'entity');
+                      return (
+                        `<div style="font:12px sans-serif;background:${colors.panel};color:${colors.text};` +
+                        `border:1px solid ${colors.border};border-radius:4px;padding:6px 8px;max-width:280px">` +
+                        `<div style="font-weight:600;word-break:break-word">${safeLabel}</div>` +
+                        `<div style="margin-top:4px;font-size:10px">` +
+                        `<span style="color:${c}">▪ ${chip}</span>` +
+                        `<span style="color:${colors.dim}"> · deg ${deg}</span></div></div>`
+                      );
+                    }
+                    const k = n.kind || 'event';
+                    const c = kindColors[k] || EVENT_RING_COLOR;
+                    const chip = escapeHtml(k);
+                    return (
+                      `<div style="font:12px sans-serif;background:${colors.panel};color:${colors.text};` +
+                      `border:1px solid ${colors.border};border-radius:4px;padding:6px 8px;max-width:280px">` +
+                      `<div style="font-weight:600;word-break:break-word">${safeLabel}</div>` +
+                      `<div style="margin-top:4px;font-size:10px">` +
+                      `<span style="color:${c}">○ ${chip}</span>` +
+                      `<span style="color:${colors.dim}"> · deg ${deg}</span></div></div>`
+                    );
+                  }}
                   nodeVal={(n: any) => nodeRadius(n)}
+                  // LINEAGE EDGES are teal + curved + arrowed; entity-event links
+                  // are thinned to cut noise. Focus mode still gates brightness.
                   linkColor={(l: any) => {
-                    // FOCUS MODE: only links between the selected node and its
-                    // direct neighbors stay bright; everything else fades.
+                    const lineageLink = isLineage(l);
                     if (focusIds) {
                       const s = linkEndId(l.source);
                       const t = linkEndId(l.target);
                       const lit = focusIds.has(s) && focusIds.has(t);
-                      return `rgba(${rgb(colors.text)}, ${lit ? 0.32 : 0.04})`;
+                      if (lineageLink) return `rgba(${rgb(colors.teal)}, ${lit ? 0.85 : 0.1})`;
+                      return `rgba(${rgb(colors.text)}, ${lit ? 0.3 : 0.04})`;
                     }
-                    return `rgba(${rgb(colors.text)}, 0.18)`;
+                    return lineageLink ? `rgba(${rgb(colors.teal)}, 0.7)` : `rgba(${rgb(colors.text)}, 0.14)`;
                   }}
-                  linkWidth={(l: any) => (l.confidence ?? 0.5) * 1.5}
+                  linkWidth={(l: any) => (isLineage(l) ? 1.5 : 0.6)}
+                  linkCurvature={(l: any) => (isLineage(l) ? 0.25 : 0)}
+                  linkDirectionalArrowLength={(l: any) => (isLineage(l) ? 3 : 0)}
+                  linkDirectionalArrowRelPos={1}
+                  linkDirectionalArrowColor={() => colors.teal}
+                  // Particles ONLY on lineage edges so CPU stays bounded.
+                  linkDirectionalParticles={(l: any) => (isLineage(l) ? 2 : 0)}
+                  linkDirectionalParticleWidth={1.6}
+                  linkDirectionalParticleColor={() => colors.teal}
                   backgroundColor={colors.base}
                   onNodeClick={(n: any) => setSelectedNode(n as GraphNode)}
                   onBackgroundClick={() => setSelectedNode(null)}
@@ -594,15 +931,40 @@ export default function GraphView() {
                   nodeCanvasObject={(n: any, ctx: CanvasRenderingContext2D, scale: number) => {
                     const r = nodeRadius(n);
                     const isMatch = matchIds.has(n.id);
+                    const isEntity = n.type === 'entity';
                     // FOCUS MODE alpha: dim everything outside the 1-hop set.
                     const dimmed = focusIds ? !focusIds.has(n.id) : false;
                     const alpha = dimmed ? 0.12 : 1;
                     ctx.globalAlpha = alpha;
 
+                    const fill = nodeFill(n);
+                    const deg = degree.get(n.id) ?? 0;
+
+                    // HUB GLOW — faint concentric ring for well-connected entity
+                    // hubs (deg >= 6), drawn BEFORE the node so it reads as a halo.
+                    // shadowBlur avoided (too expensive per-frame).
+                    if (isEntity && deg >= 6 && !dimmed) {
+                      ctx.beginPath();
+                      ctx.arc(n.x, n.y, r + 2, 0, 2 * Math.PI);
+                      ctx.strokeStyle = `rgba(${rgb(fill)}, 0.25)`;
+                      ctx.lineWidth = 2.5;
+                      ctx.stroke();
+                    }
+
+                    // NODE SHAPE — entity = filled disc; event = hollow ring with
+                    // a very faint fill so dim/hit-testing still works.
                     ctx.beginPath();
                     ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
-                    ctx.fillStyle = nodeFill(n);
-                    ctx.fill();
+                    if (isEntity) {
+                      ctx.fillStyle = fill;
+                      ctx.fill();
+                    } else {
+                      ctx.fillStyle = `rgba(${rgb(fill)}, 0.15)`;
+                      ctx.fill();
+                      ctx.lineWidth = Math.max(0.6, 1.4 / scale);
+                      ctx.strokeStyle = fill;
+                      ctx.stroke();
+                    }
 
                     // Search-match ring (teal) — drawn even when dimmed so the
                     // operator can still spot matches in a focused view.
@@ -622,7 +984,7 @@ export default function GraphView() {
                       ctx.lineWidth = 2 / scale;
                       ctx.strokeStyle = '#fff';
                       ctx.beginPath();
-                      ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
+                      ctx.arc(n.x, n.y, r + 1 / scale, 0, 2 * Math.PI);
                       ctx.stroke();
                       ctx.globalAlpha = alpha;
                     }
@@ -631,8 +993,7 @@ export default function GraphView() {
                     // zoom-gated for everyone else, plus always for matches. A
                     // dark text-halo (stroke behind fill) keeps them legible
                     // over links. Dimmed nodes don't draw labels (declutter).
-                    const deg = degree.get(n.id) ?? 0;
-                    const alwaysLabel = n.type === 'entity' || deg >= 5 || isMatch;
+                    const alwaysLabel = isEntity || deg >= 5 || isMatch;
                     if (n.label && !dimmed && (alwaysLabel || scale > 1.6)) {
                       const fontSize = Math.max(2.5, 11 / scale);
                       ctx.font = `${fontSize}px sans-serif`;
@@ -657,7 +1018,7 @@ export default function GraphView() {
                     ctx.fill();
                   }}
                   warmupTicks={20}
-                  cooldownTicks={80}
+                  cooldownTicks={120}
                   onEngineStop={() => fgRef.current?.zoomToFit(400, 60)}
                 />
               </ErrorBoundary>
@@ -666,6 +1027,100 @@ export default function GraphView() {
         )}
       </div>
     </div>
+  );
+}
+
+// ----- Detail-panel building blocks (reused for Events/Related/Entities) -----
+
+// Generic collapsible-less group: a "Title (N)" header + a vertical stack of
+// rows. Renders nothing when empty. Replaces the bespoke LineageGroup shell.
+function DetailGroup({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+  if (count === 0) return null;
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: colors.dim, marginBottom: 4 }}>
+        {title} ({count})
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{children}</div>
+    </div>
+  );
+}
+
+const detailRowStyle: React.CSSProperties = {
+  background: colors.panel,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 4,
+  padding: '6px 8px',
+  textAlign: 'left',
+  cursor: 'pointer',
+  color: colors.text,
+  width: '100%',
+};
+
+// Small colored type/kind chip button (also used inline for event entities).
+function chipBtnStyle(color: string): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '3px 6px',
+    borderRadius: 4,
+    border: `1px solid ${color}`,
+    background: colors.panel,
+    cursor: 'pointer',
+    fontSize: 11,
+    color: colors.text,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  };
+}
+
+// Entity stats block: event count + first/last seen.
+function EntityStats({ detail }: { detail: EntityDetail }) {
+  const { entity } = detail;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: colors.dim }}>
+      <div>
+        <span style={{ color: colors.text }}>{entity.eventCount}</span> events
+      </div>
+      <div>first seen: <span style={{ color: colors.text2 }}>{fmtDate(entity.firstSeenAt)}</span></div>
+      <div>last seen: <span style={{ color: colors.text2 }}>{fmtDate(entity.lastSeenAt)}</span></div>
+    </div>
+  );
+}
+
+// One connected-event row (entity drill-down) — clickable to pivot.
+function EventRow({ ev, onClick }: { ev: GraphEntityEvent; onClick: () => void }) {
+  return (
+    <button onClick={onClick} style={detailRowStyle}>
+      <div style={{ fontSize: 12, color: colors.text, wordBreak: 'break-word' }}>
+        {ev.title || ev.eventId}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4, fontSize: 10 }}>
+        <span style={{ color: colors.teal }}>{(ev.confidence ?? 0).toFixed(2)}</span>
+        {ev.eventAt ? <span style={{ color: colors.muted }}>· {relTime(ev.eventAt)}</span> : null}
+      </div>
+    </button>
+  );
+}
+
+// One co-occurring (related) entity row — colored type chip + shared-events badge.
+function RelatedEntityRow({ re, onClick }: { re: GraphRelatedEntity; onClick: () => void }) {
+  const c = entityColor(re.type);
+  return (
+    <button onClick={onClick} style={detailRowStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+        <span style={{ fontSize: 12, color: colors.text, wordBreak: 'break-word', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {re.value || re.id}
+        </span>
+        <span style={{ color: colors.dim, fontSize: 10, whiteSpace: 'nowrap' }}>×{re.sharedEvents}</span>
+      </div>
+      <div style={{ marginTop: 4, fontSize: 10 }}>
+        <span style={{ color: c }}>▪ {re.type}</span>
+      </div>
+    </button>
   );
 }
 
@@ -680,32 +1135,26 @@ function LineagePanel({ lineage }: { lineage: Lineage }) {
 }
 
 function LineageGroup({ title, neighbors }: { title: string; neighbors: LineageNeighbor[] }) {
-  if (neighbors.length === 0) return null;
   return (
-    <div>
-      <div style={{ fontSize: 11, color: colors.dim, marginBottom: 4 }}>
-        {title} ({neighbors.length})
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {neighbors.map((n) => (
-          <div
-            key={`${title}-${n.eventId}-${n.relation}`}
-            style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 8px' }}
-          >
-            <div style={{ fontSize: 12, color: colors.text, wordBreak: 'break-word' }}>
-              {n.title || n.eventId}
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4, fontSize: 10 }}>
-              {n.kind && (
-                <span style={{ color: kindColors[n.kind] || colors.accent }}>{n.kind}</span>
-              )}
-              <span style={{ color: colors.teal }}>{n.relation}</span>
-              {n.processor && <span style={{ color: colors.muted }}>· {n.processor}</span>}
-            </div>
+    <DetailGroup title={title} count={neighbors.length}>
+      {neighbors.map((n) => (
+        <div
+          key={`${title}-${n.eventId}-${n.relation}`}
+          style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 8px' }}
+        >
+          <div style={{ fontSize: 12, color: colors.text, wordBreak: 'break-word' }}>
+            {n.title || n.eventId}
           </div>
-        ))}
-      </div>
-    </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4, fontSize: 10 }}>
+            {n.kind && (
+              <span style={{ color: kindColors[n.kind] || colors.accent }}>{n.kind}</span>
+            )}
+            <span style={{ color: colors.teal }}>{n.relation}</span>
+            {n.processor && <span style={{ color: colors.muted }}>· {n.processor}</span>}
+          </div>
+        </div>
+      ))}
+    </DetailGroup>
   );
 }
 
