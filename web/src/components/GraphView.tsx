@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, Suspense, lazy, useRef } from 'react';
+import { Command } from 'cmdk';
 import Graph from 'graphology';
 import louvain from 'graphology-communities-louvain';
 import { colors, kindColors, entityColors, rgb } from '../lib/theme.js';
@@ -167,30 +168,6 @@ function GraphError({ message }: { message: string }) {
   );
 }
 
-// Absolutely-positioned zoom-control cluster over the canvas (Fit / + / −).
-const zoomClusterStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 12,
-  right: 12,
-  zIndex: 5,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-};
-const zoomBtnStyle: React.CSSProperties = {
-  width: 30,
-  height: 30,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: 4,
-  border: `1px solid ${colors.border}`,
-  background: colors.panel,
-  color: colors.text,
-  fontSize: 16,
-  lineHeight: 1,
-  cursor: 'pointer',
-};
 // Focus-mode banner (top-left over the canvas) doubling as a "clear focus" button.
 const focusHintStyle: React.CSSProperties = {
   position: 'absolute',
@@ -226,6 +203,112 @@ const exportLinkStyle = (disabled: boolean): React.CSSProperties => ({
   pointerEvents: disabled ? 'none' : 'auto',
 });
 
+// ---- Floating canvas toolbar (Phase 2 chrome) ----
+// A dark rounded pill, top-right over the canvas, replacing the old bare zoom
+// cluster. Quick-access buttons mirror the canonical sidebar checkboxes (same
+// state setters), so the toolbar never diverges from the source of truth.
+const toolbarStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 12,
+  right: 12,
+  zIndex: 5,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  padding: 4,
+  borderRadius: 8,
+  border: `1px solid ${colors.border}`,
+  background: colors.panel,
+  boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+};
+const toolbarDividerStyle: React.CSSProperties = {
+  width: 1,
+  alignSelf: 'stretch',
+  margin: '2px 3px',
+  background: colors.border,
+};
+// Toolbar icon button — `active` paints the wm-hover background + accent text so
+// toggle state (clusters on, color-by-cluster) reads at a glance.
+function toolbarBtnStyle(active = false, disabled = false): React.CSSProperties {
+  return {
+    minWidth: 28,
+    height: 28,
+    padding: '0 7px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderRadius: 5,
+    border: `1px solid ${active ? colors.borderStrong : 'transparent'}`,
+    background: active ? colors.hover : 'transparent',
+    color: disabled ? colors.muted : active ? colors.text : colors.text2,
+    fontSize: 13,
+    lineHeight: 1,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+    whiteSpace: 'nowrap',
+  };
+}
+
+// ---- Command palette (⌘K) styling ----
+// cmdk ships headless DOM (data-attribute hooks, no styles). We scope a <style>
+// block under `.wm-cmdk` and target cmdk's `[cmdk-*]` selectors + the active item
+// via `[cmdk-item][data-selected="true"]` (cmdk stamps data-selected on the item
+// under the keyboard/pointer cursor). Keeps the dark wm-* look; keyboard nav is
+// handled entirely by cmdk — we don't trap arrow/enter.
+const PALETTE_CSS = `
+.wm-cmdk { display: flex; flex-direction: column; max-height: 60vh; }
+.wm-cmdk [cmdk-input] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  border: none;
+  border-bottom: 1px solid ${colors.border};
+  background: transparent;
+  color: ${colors.text};
+  font-size: 15px;
+  outline: none;
+}
+.wm-cmdk [cmdk-input]::placeholder { color: ${colors.muted}; }
+.wm-cmdk [cmdk-list] {
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  flex: 1;
+  min-height: 0;
+}
+.wm-cmdk [cmdk-group-heading] {
+  padding: 8px 8px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: ${colors.dim};
+}
+.wm-cmdk [cmdk-item] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  border-left: 2px solid transparent;
+  color: ${colors.text2};
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.wm-cmdk [cmdk-item][data-selected="true"] {
+  background: ${colors.hover};
+  border-left-color: ${colors.teal};
+  color: ${colors.text};
+}
+.wm-cmdk [cmdk-empty] {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: ${colors.muted};
+}
+`;
+
 export default function GraphView() {
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
   const [loading, setLoading] = useState(true);
@@ -253,6 +336,9 @@ export default function GraphView() {
   const [entityDetailLoading, setEntityDetailLoading] = useState(false);
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null);
   const [eventDetailLoading, setEventDetailLoading] = useState(false);
+  // ⌘K / Ctrl-K command palette (Phase 2 chrome) — quick fuzzy jump to any node
+  // plus a few graph actions, layered as a modal over the whole component.
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const fgRef = useRef<any>(null);
 
   // Current export/fetch options derived from the toggles.
@@ -657,6 +743,28 @@ export default function GraphView() {
     [nodeById],
   );
 
+  // ⌘K / Ctrl-K toggles the command palette; Escape closes it. Registered once on
+  // the window so it works regardless of focus. preventDefault stops the browser's
+  // own ⌘K (focus address bar / search) from stealing the chord.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      } else if (e.key === 'Escape') {
+        setPaletteOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // Cap the palette node list for fuzzy-match perf on large graphs. cmdk renders
+  // every Item up front, so an unbounded list on a 1000+ node graph would stutter
+  // the open animation. 400 comfortably covers the default limit:100 fetch.
+  const PALETTE_NODE_CAP = 400;
+  const paletteNodes = useMemo(() => filteredNodes.slice(0, PALETTE_NODE_CAP), [filteredNodes]);
+
   const hasData = !loading && filteredNodes.length > 0;
   const isEmpty = !loading && filteredNodes.length === 0 && !error;
 
@@ -667,6 +775,29 @@ export default function GraphView() {
 
   return (
     <div style={{ display: 'flex', height: '100%', background: colors.base }}>
+      {/* ⌘K command palette — modal overlay above the entire console. */}
+      {paletteOpen && (
+        <CommandPalette
+          nodes={paletteNodes}
+          degree={degree}
+          onClose={() => setPaletteOpen(false)}
+          onRunAction={(fn) => {
+            fn();
+            setPaletteOpen(false);
+          }}
+          onSelectNode={(node) => {
+            setPaletteOpen(false);
+            pivotTo(node);
+          }}
+          actions={[
+            { label: 'Fit to view', hint: 'zoom', run: zoomFit },
+            { label: 'Toggle cluster hulls', hint: showClusters ? 'on' : 'off', run: () => setShowClusters((v) => !v) },
+            { label: 'Color by cluster / type', hint: colorByCluster ? 'cluster' : 'type', run: () => setColorByCluster((v) => !v) },
+            { label: 'Clear selection & focus', hint: '', run: () => setSelectedNode(null) },
+          ]}
+        />
+      )}
+
       {/* Sidebar */}
       <div style={{ width: 280, padding: 16, background: colors.panel, color: colors.text, overflow: 'auto', borderRight: `1px solid ${colors.border}`, flexShrink: 0 }}>
         <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>🔗 Intelligence Graph</h2>
@@ -978,11 +1109,42 @@ export default function GraphView() {
 
         {hasData && (
           <>
-            {/* Zoom-control cluster, absolutely positioned over the canvas. */}
-            <div style={zoomClusterStyle}>
-              <button style={zoomBtnStyle} title="Fit graph to view" onClick={zoomFit}>⤢</button>
-              <button style={zoomBtnStyle} title="Zoom in" onClick={() => zoomBy(1.4)}>+</button>
-              <button style={zoomBtnStyle} title="Zoom out" onClick={() => zoomBy(1 / 1.4)}>−</button>
+            {/* Floating toolbar (Phase 2): zoom + quick-access toggles. Buttons
+                wire to the SAME state setters as the canonical sidebar checkboxes,
+                so they're a shortcut, not a second source of truth. */}
+            <div style={toolbarStyle}>
+              <button style={toolbarBtnStyle()} title="Zoom out" onClick={() => zoomBy(1 / 1.4)}>−</button>
+              <button style={toolbarBtnStyle()} title="Fit graph to view" onClick={zoomFit}>⤢</button>
+              <button style={toolbarBtnStyle()} title="Zoom in" onClick={() => zoomBy(1.4)}>+</button>
+              <span style={toolbarDividerStyle} />
+              <button
+                style={toolbarBtnStyle()}
+                title="Search entities & events (⌘K)"
+                onClick={() => setPaletteOpen(true)}
+              >
+                ⌘K
+              </button>
+              <button
+                style={toolbarBtnStyle(showClusters)}
+                title={showClusters ? 'Hide cluster hulls' : 'Show cluster hulls'}
+                onClick={() => setShowClusters((v) => !v)}
+              >
+                ⬡ clusters
+              </button>
+              <button
+                style={toolbarBtnStyle(colorByCluster, clusterCount === 0)}
+                disabled={clusterCount === 0}
+                title={
+                  clusterCount === 0
+                    ? 'No clusters in view'
+                    : colorByCluster
+                      ? 'Coloring by cluster — switch to type'
+                      : 'Coloring by type — switch to cluster'
+                }
+                onClick={() => setColorByCluster((v) => !v)}
+              >
+                ● {colorByCluster ? 'cluster' : 'type'}
+              </button>
             </div>
 
             {/* Focus-mode hint, shown while a node is selected. */}
@@ -1216,6 +1378,109 @@ export default function GraphView() {
             </Suspense>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ----- ⌘K command palette (Phase 2 chrome) -----
+
+interface PaletteAction {
+  label: string;
+  hint: string;
+  run: () => void;
+}
+
+// Centered modal command palette built on headless cmdk. The backdrop dims the
+// whole console and closes on click; the inner <Command> stops propagation so
+// clicks inside don't dismiss it. cmdk owns keyboard nav (up/down/enter) and the
+// fuzzy filter — we only feed it `value` strings and style its [cmdk-*] DOM via
+// the scoped .wm-cmdk <style> block. Node Items match on "label id" so either
+// hits. Selecting a node pivots+centers via the parent's pivotTo.
+function CommandPalette({
+  nodes,
+  degree,
+  actions,
+  onClose,
+  onRunAction,
+  onSelectNode,
+}: {
+  nodes: GraphNode[];
+  degree: Map<string, number>;
+  actions: PaletteAction[];
+  onClose: () => void;
+  onRunAction: (run: () => void) => void;
+  onSelectNode: (node: GraphNode) => void;
+}) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1000,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        paddingTop: '12vh',
+      }}
+    >
+      <style>{PALETTE_CSS}</style>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 560,
+          maxWidth: '92vw',
+          background: colors.panel,
+          border: `1px solid ${colors.border}`,
+          borderRadius: 10,
+          boxShadow: '0 16px 48px rgba(0,0,0,0.55)',
+          overflow: 'hidden',
+        }}
+      >
+        <Command className="wm-cmdk" label="Graph command palette">
+          <Command.Input autoFocus placeholder="Search entities & events… (⌘K)" />
+          <Command.List>
+            <Command.Empty>No matches.</Command.Empty>
+
+            <Command.Group heading="Actions">
+              {actions.map((a) => (
+                <Command.Item key={a.label} value={a.label} onSelect={() => onRunAction(a.run)}>
+                  <span style={{ flex: 1 }}>{a.label}</span>
+                  {a.hint && <span style={{ color: colors.dim, fontSize: 11 }}>{a.hint}</span>}
+                </Command.Item>
+              ))}
+            </Command.Group>
+
+            <Command.Group heading="Nodes">
+              {nodes.map((n) => {
+                const isEntity = n.type === 'entity';
+                const chipColor = isEntity
+                  ? entityColor(n.entityType)
+                  : kindColors[n.kind || ''] || EVENT_RING_COLOR;
+                const chipLabel = isEntity ? n.entityType || 'entity' : n.kind || 'event';
+                const deg = degree.get(n.id) ?? 0;
+                return (
+                  <Command.Item
+                    key={n.id}
+                    value={`${n.label} ${n.id}`}
+                    onSelect={() => onSelectNode(n)}
+                  >
+                    <span style={{ color: chipColor, fontSize: 11, width: 12, textAlign: 'center' }}>
+                      {isEntity ? '▪' : '○'}
+                    </span>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {n.label}
+                    </span>
+                    <span style={{ color: chipColor, fontSize: 11 }}>{chipLabel}</span>
+                    <span style={{ color: colors.dim, fontSize: 11 }}>deg {deg}</span>
+                  </Command.Item>
+                );
+              })}
+            </Command.Group>
+          </Command.List>
+        </Command>
       </div>
     </div>
   );
