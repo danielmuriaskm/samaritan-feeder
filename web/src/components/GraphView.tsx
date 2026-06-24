@@ -1,4 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo, Suspense, lazy, useRef } from 'react';
+import Graph from 'graphology';
+import louvain from 'graphology-communities-louvain';
 import { colors, kindColors, entityColors, rgb } from '../lib/theme.js';
 import {
   getGraphNetwork, getLineage, getGraphEntity, getGraphEvent, graphExportUrl,
@@ -8,6 +10,39 @@ import {
 import type { IntelEvent } from '../lib/types.js';
 
 const ForceGraph2D = lazy(() => import('react-force-graph-2d'));
+
+// ---- Louvain clustering: translucent convex-hull regions behind the nodes ----
+// Distinct hues for communities, kept SEPARATE from the entity-type colors — the
+// nodes stay colored by type while the hulls show community structure on top.
+const CLUSTER_PALETTE = [
+  '#44ffcc', '#ff8800', '#b48cff', '#44ff88', '#3388ff', '#ff4488',
+  '#ffd24a', '#44aaff', '#ff6644', '#88ddaa', '#cc88ff', '#aaff44',
+];
+function clusterColor(c: number): string {
+  const i = ((c % CLUSTER_PALETTE.length) + CLUSTER_PALETTE.length) % CLUSTER_PALETTE.length;
+  return CLUSTER_PALETTE[i];
+}
+// Andrew's monotone-chain convex hull (CCW). Returns the input for < 3 points.
+function convexHull(pts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+  if (pts.length < 3) return pts.slice();
+  const p = [...pts].sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Array<{ x: number; y: number }> = [];
+  for (const pt of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], pt) <= 0) lower.pop();
+    lower.push(pt);
+  }
+  const upper: Array<{ x: number; y: number }> = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const pt = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
+    upper.push(pt);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
 
 interface GraphNode {
   id: string;
@@ -206,6 +241,8 @@ export default function GraphView() {
   // hideWeak ALSO drops degree-1 leaf EVENT nodes (single-entity "flowers").
   const [hideIsolated, setHideIsolated] = useState(true);
   const [hideWeak, setHideWeak] = useState(false);
+  // Louvain community hulls drawn behind the nodes (cluster structure).
+  const [showClusters, setShowClusters] = useState(true);
   // 006 lineage drill-down for the selected EVENT node.
   const [lineage, setLineage] = useState<Lineage | null>(null);
   const [lineageLoading, setLineageLoading] = useState(false);
@@ -411,6 +448,28 @@ export default function GraphView() {
     }
     return d;
   }, [filteredLinks]);
+
+  // LOUVAIN community detection (graphology) over the RENDERED graph. Nodes keep
+  // their entity-type colors; communities surface as translucent convex-hull
+  // regions behind the nodes, so cluster structure reads without losing meaning.
+  const communities = useMemo(() => {
+    const g = new Graph({ type: 'undirected' });
+    for (const n of filteredNodes) if (!g.hasNode(n.id)) g.addNode(n.id);
+    for (const l of filteredLinks) {
+      const s = linkEndId(l.source);
+      const t = linkEndId(l.target);
+      if (s !== t && g.hasNode(s) && g.hasNode(t) && !g.hasEdge(s, t)) g.addEdge(s, t);
+    }
+    if (g.order === 0 || g.size === 0) return new Map<string, number>();
+    try {
+      const assignment = louvain(g) as Record<string, number>;
+      return new Map<string, number>(Object.entries(assignment));
+    } catch {
+      return new Map<string, number>();
+    }
+  }, [filteredNodes, filteredLinks]);
+
+  const clusterCount = useMemo(() => new Set(communities.values()).size, [communities]);
 
   // Fast id lookup so detail-row clicks can decide whether to pivot+center on an
   // in-view node (vs. just selecting an off-graph one).
@@ -639,10 +698,21 @@ export default function GraphView() {
             />
             <span>Hide weak<span style={{ color: colors.dim }}> (leaf events)</span></span>
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showClusters}
+              onChange={(e) => setShowClusters(e.target.checked)}
+            />
+            <span>Show clusters<span style={{ color: colors.dim }}> (communities)</span></span>
+          </label>
         </div>
 
         <div style={{ fontSize: 12, color: colors.dim, marginBottom: 12 }}>
           Nodes: {filteredNodes.length} | Links: {filteredLinks.length}
+          {showClusters && clusterCount > 0 && (
+            <span style={{ color: colors.dim }}> · {clusterCount} cluster{clusterCount === 1 ? '' : 's'}</span>
+          )}
           {matchIds.size > 0 && (
             <span style={{ color: colors.teal }}> · {matchIds.size} match{matchIds.size === 1 ? '' : 'es'}</span>
           )}
@@ -925,6 +995,49 @@ export default function GraphView() {
                   linkDirectionalParticleWidth={1.6}
                   linkDirectionalParticleColor={() => colors.teal}
                   backgroundColor={colors.base}
+                  // CLUSTER HULLS — translucent convex-hull regions per Louvain
+                  // community, drawn BEHIND the nodes. Nodes keep type colors; the
+                  // hull just shows "these belong together". Communities with < 3
+                  // visible members are skipped so it doesn't clutter.
+                  onRenderFramePre={(ctx: CanvasRenderingContext2D) => {
+                    if (!showClusters || communities.size === 0) return;
+                    const byComm = new Map<number, Array<{ x: number; y: number }>>();
+                    for (const n of graphData.nodes as Array<{ id: string; x?: number; y?: number }>) {
+                      if (n.x == null || n.y == null) continue;
+                      const c = communities.get(n.id);
+                      if (c == null) continue;
+                      const arr = byComm.get(c);
+                      if (arr) arr.push({ x: n.x, y: n.y });
+                      else byComm.set(c, [{ x: n.x, y: n.y }]);
+                    }
+                    ctx.save();
+                    for (const [c, pts] of byComm) {
+                      if (pts.length < 3) continue;
+                      const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+                      const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+                      const hull = convexHull(pts);
+                      if (hull.length < 3) continue;
+                      const col = clusterColor(c);
+                      const PAD = 16;
+                      ctx.beginPath();
+                      hull.forEach((p, i) => {
+                        const dx = p.x - cx;
+                        const dy = p.y - cy;
+                        const len = Math.hypot(dx, dy) || 1;
+                        const px = p.x + (dx / len) * PAD;
+                        const py = p.y + (dy / len) * PAD;
+                        if (i === 0) ctx.moveTo(px, py);
+                        else ctx.lineTo(px, py);
+                      });
+                      ctx.closePath();
+                      ctx.fillStyle = `rgba(${rgb(col)}, 0.06)`;
+                      ctx.fill();
+                      ctx.strokeStyle = `rgba(${rgb(col)}, 0.28)`;
+                      ctx.lineWidth = 1.2;
+                      ctx.stroke();
+                    }
+                    ctx.restore();
+                  }}
                   onNodeClick={(n: any) => setSelectedNode(n as GraphNode)}
                   onBackgroundClick={() => setSelectedNode(null)}
                   nodeCanvasObjectMode={() => 'replace'}
