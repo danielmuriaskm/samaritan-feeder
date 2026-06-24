@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, Suspense, lazy, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, Suspense, lazy, useRef } from 'react';
 import { colors, kindColors, entityColors, rgb } from '../lib/theme.js';
 import { getGraphNetwork, getLineage, graphExportUrl, type GraphOpts, type LineageNeighbor } from '../lib/api.js';
 
@@ -150,19 +150,36 @@ export default function GraphView() {
     };
   }, [selectedNode]);
 
-  const filteredNodes = data.nodes.filter((n) => {
-    if (entityTypeFilter !== 'all' && n.type === 'entity' && n.entityType !== entityTypeFilter) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      return n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q);
-    }
-    return true;
-  });
+  // react-force-graph-2d MUTATES the links array in place, replacing each link's
+  // `source`/`target` string id with the resolved node OBJECT after the first
+  // render. A naive `nodeIds.has(l.source)` then fails on every subsequent render
+  // (a Set of id strings never contains an object) and ALL links get dropped —
+  // that's the "Links: 0 / no edges" bug. Extract the id from either shape.
+  const linkEndId = (e: unknown): string =>
+    e && typeof e === 'object' ? String((e as { id: unknown }).id) : String(e);
 
-  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
-  const filteredLinks = data.links.filter((l) => filteredNodeIds.has(l.source) && filteredNodeIds.has(l.target));
+  const { filteredNodes, filteredLinks } = useMemo(() => {
+    const nodes = data.nodes.filter((n) => {
+      if (entityTypeFilter !== 'all' && n.type === 'entity' && n.entityType !== entityTypeFilter) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        return n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q);
+      }
+      return true;
+    });
+    const ids = new Set(nodes.map((n) => n.id));
+    const links = data.links.filter((l) => ids.has(linkEndId(l.source)) && ids.has(linkEndId(l.target)));
+    return { filteredNodes: nodes, filteredLinks: links };
+  }, [data, entityTypeFilter, searchQuery]);
 
-  const entityTypes = [...new Set(data.nodes.filter((n) => n.type === 'entity').map((n) => n.entityType).filter(Boolean))];
+  // Stable graphData reference so ForceGraph only re-processes (and re-mutates)
+  // when the filtered set actually changes — not on every unrelated re-render.
+  const graphData = useMemo(() => ({ nodes: filteredNodes, links: filteredLinks }), [filteredNodes, filteredLinks]);
+
+  const entityTypes = useMemo(
+    () => [...new Set(data.nodes.filter((n) => n.type === 'entity').map((n) => n.entityType).filter(Boolean))],
+    [data],
+  );
 
   const hasData = !loading && filteredNodes.length > 0;
   const isEmpty = !loading && filteredNodes.length === 0 && !error;
@@ -343,7 +360,7 @@ export default function GraphView() {
             <ErrorBoundary fallback={<GraphError message="Graph rendering failed" />}>
               <ForceGraph2D
                 ref={fgRef}
-                graphData={{ nodes: filteredNodes, links: filteredLinks }}
+                graphData={graphData}
                 nodeAutoColorBy="type"
                 nodeLabel="label"
                 nodeColor={(n: any) => {

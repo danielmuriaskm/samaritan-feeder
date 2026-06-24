@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { getBrief } from '../lib/api.js';
+import { getBrief, getEvent } from '../lib/api.js';
 import type { Brief } from '../lib/types.js';
 import { signalColors, colors, rgb, fonts } from '../lib/theme.js';
 
@@ -121,6 +121,8 @@ export default function BriefPanel() {
   const [brief, setBrief] = useState<Brief | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Resolve the brief's ranked event ids -> titles so the list isn't raw UUIDs.
+  const [eventTitles, setEventTitles] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +145,32 @@ export default function BriefPanel() {
       cancelled = true;
     };
   }, [userId]);
+
+  // Hydrate ranked-event ids -> titles (best-effort; raw id is the fallback).
+  useEffect(() => {
+    const ids = (brief?.body?.rankedEventIds ?? []).map(String);
+    if (ids.length === 0) {
+      setEventTitles({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      ids.slice(0, 50).map(async (id) => {
+        try {
+          const ev = await getEvent(id);
+          const label = ev?.title || ev?.content?.slice(0, 90) || '';
+          return [id, label] as const;
+        } catch {
+          return [id, ''] as const;
+        }
+      }),
+    ).then((pairs) => {
+      if (!cancelled) setEventTitles(Object.fromEntries(pairs.filter(([, t]) => t)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [brief]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -234,11 +262,18 @@ export default function BriefPanel() {
                 Ranked events <span style={{ color: 'var(--wm-muted)', fontWeight: 400 }}>({rankedEventIds.length})</span>
               </div>
               <ol style={{ margin: 0, paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {rankedEventIds.map((id, i) => (
-                  <li key={`${id}-${i}`} style={{ fontSize: 13, color: 'var(--wm-text-2)' }}>
-                    <code style={{ fontFamily: fonts.mono, fontSize: 12, color: 'var(--wm-dim)' }}>{String(id)}</code>
-                  </li>
-                ))}
+                {rankedEventIds.map((id, i) => {
+                  const title = eventTitles[String(id)];
+                  return (
+                    <li key={`${id}-${i}`} style={{ fontSize: 13, color: 'var(--wm-text-2)' }}>
+                      {title ? (
+                        <span>{title}</span>
+                      ) : (
+                        <code style={{ fontFamily: fonts.mono, fontSize: 12, color: 'var(--wm-dim)' }}>{String(id)}</code>
+                      )}
+                    </li>
+                  );
+                })}
               </ol>
             </div>
           )}
