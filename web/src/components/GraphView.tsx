@@ -51,6 +51,9 @@ interface GraphNode {
   label: string;
   kind?: string;
   entityType?: string;
+  // /network now stamps a timestamp per node (event → eventAt ms, entity →
+  // lastSeenAt ms). Drives the time-range brush; optional/defensive.
+  time?: number;
 }
 
 interface GraphLink {
@@ -148,6 +151,14 @@ function fmtDate(ts: number | undefined): string {
   if (!ts || !Number.isFinite(ts)) return '—';
   const ms = ts < 1e12 ? ts * 1000 : ts;
   return new Date(ms).toLocaleString();
+}
+
+// Compact date + time for the time-range brush ends. Brush values are always ms
+// (node.time), so no seconds-vs-ms guard is needed here.
+function fmtBrushDate(ms: number): string {
+  if (!Number.isFinite(ms)) return '—';
+  const d = new Date(ms);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 function GraphFallback() {
@@ -328,6 +339,10 @@ export default function GraphView() {
   const [showClusters, setShowClusters] = useState(true);
   // Color nodes by community instead of by entity type.
   const [colorByCluster, setColorByCluster] = useState(false);
+  // TIME-RANGE BRUSH — null = full range = no filtering. A [start, end] window in
+  // ms constrains the rendered set to nodes whose `time` falls inside it. Reset to
+  // null whenever the data's [tMin, tMax] domain changes (see effect below).
+  const [timeWindow, setTimeWindow] = useState<[number, number] | null>(null);
   // 006 lineage drill-down for the selected EVENT node.
   const [lineage, setLineage] = useState<Lineage | null>(null);
   const [lineageLoading, setLineageLoading] = useState(false);
@@ -473,16 +488,63 @@ export default function GraphView() {
   // the d3 link distance below.
   const isLineage = (l: { confidence?: number }): boolean => (l.confidence ?? 0) >= 0.999;
 
-  // Build the rendered node/link set in three passes:
+  // TIME DOMAIN — min/max of every node's finite `time`. `valid` is false when
+  // there are fewer than 2 DISTINCT timestamps, in which case the brush UI and
+  // all time filtering are skipped entirely.
+  const { tMin, tMax, timeValid } = useMemo(() => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    const seen = new Set<number>();
+    for (const n of data.nodes) {
+      const t = n.time;
+      if (typeof t !== 'number' || !Number.isFinite(t)) continue;
+      seen.add(t);
+      if (t < lo) lo = t;
+      if (t > hi) hi = t;
+    }
+    const valid = seen.size >= 2 && Number.isFinite(lo) && Number.isFinite(hi) && hi > lo;
+    return { tMin: valid ? lo : 0, tMax: valid ? hi : 0, timeValid: valid };
+  }, [data]);
+
+  // Reset the brush to full range (null) whenever the data's time domain changes
+  // (new fetch). Keyed on tMin/tMax so it only fires on a real domain shift.
+  useEffect(() => {
+    setTimeWindow(null);
+  }, [tMin, tMax]);
+
+  // Count of nodes currently inside the brush window (for the brush readout).
+  // Mirrors the filteredNodes time pass: no-time nodes always count as in-window.
+  const inWindowCount = useMemo(() => {
+    if (!timeWindow) return data.nodes.length;
+    const [lo, hi] = timeWindow;
+    let c = 0;
+    for (const n of data.nodes) {
+      const t = n.time;
+      if (typeof t === 'number' && Number.isFinite(t) && (t < lo || t > hi)) continue;
+      c++;
+    }
+    return c;
+  }, [data, timeWindow]);
+
+  // Build the rendered node/link set in passes:
   //   1. entity-type filter (search no longer filters — it highlights + centers).
-  //   2. keep only links whose BOTH ends survived the filter (mutation-safe ids).
-  //   3. declutter by degree: drop isolated (deg 0) and, if enabled, weak leaf
+  //   2. time-range brush — drop nodes whose finite `time` is OUTSIDE the window
+  //      (nodes with no time are always kept, defensive).
+  //   3. keep only links whose BOTH ends survived the filter (mutation-safe ids).
+  //   4. declutter by degree: drop isolated (deg 0) and, if enabled, weak leaf
   //      EVENT nodes (deg 1), recomputing the link set after each prune so the
   //      degree map and the rendered edges stay consistent.
   const { filteredNodes, filteredLinks } = useMemo(() => {
-    // Pass 1 — entity-type filter only.
+    // Pass 1 — entity-type filter + time-range brush. A node is dropped only if
+    // it has a finite `time` OUTSIDE the window; nodes lacking a time survive so
+    // a partial backend rollout never blanks the graph. Orphans left behind are
+    // cleaned up naturally by the isolated/leaf pruning below.
     let nodes = data.nodes.filter((n) => {
       if (entityTypeFilter !== 'all' && n.type === 'entity' && n.entityType !== entityTypeFilter) return false;
+      if (timeWindow) {
+        const t = n.time;
+        if (typeof t === 'number' && Number.isFinite(t) && (t < timeWindow[0] || t > timeWindow[1])) return false;
+      }
       return true;
     });
 
@@ -521,7 +583,7 @@ export default function GraphView() {
     }
 
     return { filteredNodes: nodes, filteredLinks: links };
-  }, [data, entityTypeFilter, hideIsolated, hideWeak]);
+  }, [data, entityTypeFilter, hideIsolated, hideWeak, timeWindow]);
 
   // Stable graphData reference so ForceGraph only re-processes (and re-mutates)
   // when the filtered set actually changes — not on every unrelated re-render.
@@ -1160,104 +1222,8 @@ export default function GraphView() {
           </div>
         </div>
 
-        {selectedNode && (
-          <div style={{ background: colors.base, padding: 12, borderRadius: 6, fontSize: 13, marginBottom: 16, border: `1px solid ${colors.border}` }}>
-            <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>
-              {selectedNode.type === 'event' ? '📄 Event' : '🔖 Entity'}
-              <span style={{ color: colors.dim, fontWeight: 400 }}> · deg {selectedDegree}</span>
-            </h3>
-            <p style={{ margin: '4px 0', wordBreak: 'break-all' }}><strong>ID:</strong> {selectedNode.id}</p>
-            <p style={{ margin: '4px 0' }}><strong>Label:</strong> {selectedNode.label}</p>
-            {selectedNode.kind && (
-              <p style={{ margin: '4px 0' }}>
-                <strong>Kind:</strong>{' '}
-                <span style={{ color: kindColors[selectedNode.kind] || colors.accent }}>{selectedNode.kind}</span>
-              </p>
-            )}
-            {selectedNode.entityType && (
-              <p style={{ margin: '4px 0' }}>
-                <strong>Type:</strong>{' '}
-                <span style={{ color: entityColor(selectedNode.entityType) }}>{selectedNode.entityType}</span>
-              </p>
-            )}
-
-            {/* ENTITY drill-down — stats, connected events, co-occurring entities. */}
-            {selectedIsEntity && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
-                {entityDetailLoading ? (
-                  <div style={{ fontSize: 12, color: colors.dim }}>Loading entity…</div>
-                ) : entityDetail ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <EntityStats detail={entityDetail} />
-                    <DetailGroup title="Events" count={entityDetail.events.length}>
-                      {entityDetail.events.map((ev) => (
-                        <EventRow
-                          key={ev.eventId}
-                          ev={ev}
-                          onClick={() =>
-                            pivotTo({ id: ev.eventId, type: 'event', label: ev.title || ev.eventId, kind: undefined })
-                          }
-                        />
-                      ))}
-                    </DetailGroup>
-                    <DetailGroup title="Related entities" count={entityDetail.relatedEntities.length}>
-                      {entityDetail.relatedEntities.map((re) => (
-                        <RelatedEntityRow
-                          key={re.id}
-                          re={re}
-                          onClick={() =>
-                            pivotTo({ id: re.id, type: 'entity', label: re.value || re.id, entityType: re.type })
-                          }
-                        />
-                      ))}
-                    </DetailGroup>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: colors.muted }}>no detail</div>
-                )}
-              </div>
-            )}
-
-            {/* EVENT drill-down — extracted entities (above the lineage panel). */}
-            {selectedIsEvent && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
-                <h4 style={{ margin: '0 0 6px', fontSize: 12, color: colors.dim }}>Entities</h4>
-                {eventDetailLoading ? (
-                  <div style={{ fontSize: 12, color: colors.dim }}>Loading entities…</div>
-                ) : eventDetail && eventDetail.entities.length > 0 ? (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {eventDetail.entities.map((en) => (
-                      <button
-                        key={en.id}
-                        onClick={() => pivotTo({ id: en.id, type: 'entity', label: en.value || en.id, entityType: en.type })}
-                        title={en.context || `${en.type} · ${en.value}`}
-                        style={chipBtnStyle(entityColor(en.type))}
-                      >
-                        <span style={{ color: entityColor(en.type) }}>{en.value || en.id}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: colors.muted }}>no entities</div>
-                )}
-              </div>
-            )}
-
-            {/* 006 lineage drill-down — only meaningful for event nodes. */}
-            {selectedIsEvent && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
-                <h4 style={{ margin: '0 0 6px', fontSize: 12, color: colors.dim }}>Lineage</h4>
-                {lineageLoading ? (
-                  <div style={{ fontSize: 12, color: colors.dim }}>Loading lineage…</div>
-                ) : hasLineage ? (
-                  <LineagePanel lineage={lineage!} />
-                ) : (
-                  <div style={{ fontSize: 12, color: colors.muted }}>no lineage</div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        {/* The per-node detail card now lives in the right-side slide-in drawer
+            (NodeDetailDrawer), overlaid on the canvas — not in this sidebar. */}
 
         {/* DATA-DRIVEN LEGEND — only buckets/kinds present in the rendered view,
             with live counts. Entity swatch = square disc; event swatch = ring,
@@ -1659,8 +1625,42 @@ export default function GraphView() {
                 />
               )}
             </div>
+
+            {/* TIME-RANGE BRUSH — pinned to the bottom of the canvas, above it but
+                below the toolbar. Rendered only when there are ≥2 distinct node
+                timestamps; otherwise nothing (and no filtering). */}
+            {timeValid && (
+              <TimeBrush
+                tMin={tMin}
+                tMax={tMax}
+                window={timeWindow}
+                inWindow={inWindowCount}
+                total={data.nodes.length}
+                onChange={setTimeWindow}
+              />
+            )}
           </>
         )}
+
+        {/* NODE-DETAIL DRAWER — slides in from the right edge of the canvas when a
+            node is selected. Kept always-mounted so the transform/opacity transition
+            animates both ways; pointer-events + off-screen translate make it inert
+            when closed so canvas pan/zoom/clicks pass through. */}
+        <NodeDetailDrawer
+          node={selectedNode}
+          degree={selectedDegree}
+          onClose={() => setSelectedNode(null)}
+          selectedIsEntity={selectedIsEntity}
+          selectedIsEvent={selectedIsEvent}
+          entityDetail={entityDetail}
+          entityDetailLoading={entityDetailLoading}
+          eventDetail={eventDetail}
+          eventDetailLoading={eventDetailLoading}
+          lineage={lineage}
+          lineageLoading={lineageLoading}
+          hasLineage={hasLineage}
+          pivotTo={pivotTo}
+        />
       </div>
     </div>
   );
@@ -1765,6 +1765,381 @@ function CommandPalette({
           </Command.List>
         </Command>
       </div>
+    </div>
+  );
+}
+
+// ----- Time-range brush (Feature A) -----
+
+// A compact dual-range slider pinned to the bottom of the canvas. Two native
+// <input type="range"> overlap on a shared track: the left thumb sets the window
+// start, the right thumb the end, constrained so start ≤ end. We keep the inputs
+// fully controlled — `window ?? [tMin, tMax]` means "no window" renders as the
+// full span and the first drag materializes a real [start, end]. Native ranges
+// were chosen over a custom drag handler for accessibility (keyboard arrows) and
+// to avoid the pointer-capture bugs a hand-rolled two-thumb slider invites; the
+// only cost is the z-index/pointer-events trick so the lower thumb stays grabbable.
+function TimeBrush({
+  tMin,
+  tMax,
+  window: win,
+  inWindow,
+  total,
+  onChange,
+}: {
+  tMin: number;
+  tMax: number;
+  window: [number, number] | null;
+  inWindow: number;
+  total: number;
+  onChange: (w: [number, number] | null) => void;
+}) {
+  const [lo, hi] = win ?? [tMin, tMax];
+  const span = tMax - tMin;
+  const step = span > 0 ? span / 200 : 1;
+
+  // Setting a window that equals the full domain is treated as "no filter" (null)
+  // so the reset state and a fully-widened brush behave identically downstream.
+  const commit = (nextLo: number, nextHi: number) => {
+    if (nextLo <= tMin && nextHi >= tMax) onChange(null);
+    else onChange([nextLo, nextHi]);
+  };
+  const onLo = (v: number) => commit(Math.min(v, hi), hi);
+  const onHi = (v: number) => commit(lo, Math.max(v, lo));
+
+  const active = win != null;
+  const rangeBase: React.CSSProperties = {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    width: '100%',
+    margin: 0,
+    height: 18,
+    background: 'transparent',
+    pointerEvents: 'none', // re-enabled on the thumb via the scoped <style> below
+    WebkitAppearance: 'none',
+    appearance: 'none',
+  };
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        bottom: 12,
+        zIndex: 4,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '8px 12px',
+        borderRadius: 8,
+        border: `1px solid ${colors.border}`,
+        background: colors.panel,
+        boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+        color: colors.text2,
+        fontSize: 11,
+      }}
+    >
+      <style>{`
+        .wm-brush input[type=range]::-webkit-slider-thumb {
+          -webkit-appearance: none; appearance: none;
+          width: 13px; height: 13px; border-radius: 50%;
+          background: ${colors.teal}; border: 2px solid ${colors.base};
+          cursor: pointer; pointer-events: auto; margin-top: -1px;
+        }
+        .wm-brush input[type=range]::-moz-range-thumb {
+          width: 13px; height: 13px; border-radius: 50%;
+          background: ${colors.teal}; border: 2px solid ${colors.base};
+          cursor: pointer; pointer-events: auto;
+        }
+        .wm-brush input[type=range]::-webkit-slider-runnable-track { height: 4px; background: transparent; }
+        .wm-brush input[type=range]::-moz-range-track { height: 4px; background: transparent; }
+        .wm-brush input[type=range] { outline: none; }
+      `}</style>
+
+      <span style={{ color: colors.dim, whiteSpace: 'nowrap' }}>🕑</span>
+
+      <span style={{ color: active ? colors.teal : colors.text2, whiteSpace: 'nowrap', minWidth: 118 }}>
+        {fmtBrushDate(lo)}
+      </span>
+
+      {/* Dual-range track. The wrapper has the real height; both inputs stack on
+          top with pointer-events only on their thumbs so the lower one is reachable. */}
+      <div className="wm-brush" style={{ position: 'relative', flex: 1, height: 18, minWidth: 80 }}>
+        {/* Track baseline + selected-window fill. */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 7, height: 4, borderRadius: 2, background: colors.border }} />
+        {span > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 7,
+              height: 4,
+              borderRadius: 2,
+              background: colors.teal,
+              left: `${((lo - tMin) / span) * 100}%`,
+              right: `${((tMax - hi) / span) * 100}%`,
+            }}
+          />
+        )}
+        <input
+          type="range"
+          min={tMin}
+          max={tMax}
+          step={step}
+          value={lo}
+          onChange={(e) => onLo(Number(e.target.value))}
+          aria-label="Time window start"
+          style={{ ...rangeBase, zIndex: 2 }}
+        />
+        <input
+          type="range"
+          min={tMin}
+          max={tMax}
+          step={step}
+          value={hi}
+          onChange={(e) => onHi(Number(e.target.value))}
+          aria-label="Time window end"
+          style={{ ...rangeBase, zIndex: 3 }}
+        />
+      </div>
+
+      <span style={{ color: active ? colors.teal : colors.text2, whiteSpace: 'nowrap', minWidth: 118, textAlign: 'right' }}>
+        {fmtBrushDate(hi)}
+      </span>
+
+      <span style={{ color: colors.dim, whiteSpace: 'nowrap' }}>
+        {inWindow}/{total} in window
+      </span>
+
+      <button
+        onClick={() => onChange(null)}
+        disabled={!active}
+        title="Reset to full time range"
+        style={{
+          padding: '3px 7px',
+          borderRadius: 4,
+          border: `1px solid ${colors.border}`,
+          background: colors.base,
+          color: active ? colors.text : colors.muted,
+          cursor: active ? 'pointer' : 'default',
+          fontSize: 11,
+          opacity: active ? 1 : 0.5,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        ⤺ reset
+      </button>
+    </div>
+  );
+}
+
+// ----- Node-detail drawer (Feature B) -----
+
+// Right-side slide-in drawer overlaying the canvas, holding the selected node's
+// detail (relocated verbatim from the old left-sidebar card). Always mounted so
+// the transform/opacity transition animates both ways. We snapshot the node into
+// `shown` on open so the body keeps rendering its content during the slide-OUT
+// after `node` goes null (otherwise it'd blank instantly and the close animation
+// would look broken). When closed it's translated off-screen with pointer-events
+// off, so it never intercepts canvas pan/zoom/clicks.
+function NodeDetailDrawer({
+  node,
+  degree,
+  onClose,
+  selectedIsEntity,
+  selectedIsEvent,
+  entityDetail,
+  entityDetailLoading,
+  eventDetail,
+  eventDetailLoading,
+  lineage,
+  lineageLoading,
+  hasLineage,
+  pivotTo,
+}: {
+  node: GraphNode | null;
+  degree: number;
+  onClose: () => void;
+  selectedIsEntity: boolean;
+  selectedIsEvent: boolean;
+  entityDetail: EntityDetail | null;
+  entityDetailLoading: boolean;
+  eventDetail: EventDetail | null;
+  eventDetailLoading: boolean;
+  lineage: Lineage | null;
+  lineageLoading: boolean;
+  hasLineage: boolean;
+  pivotTo: (node: GraphNode) => void;
+}) {
+  const open = node != null;
+  // Keep the last non-null node so content stays visible through the slide-out.
+  const [shown, setShown] = useState<GraphNode | null>(node);
+  useEffect(() => {
+    if (node) setShown(node);
+  }, [node]);
+  const n = node ?? shown;
+
+  return (
+    <div
+      aria-hidden={!open}
+      style={{
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 320,
+        maxWidth: '85%',
+        background: colors.panel,
+        borderLeft: `1px solid ${colors.border}`,
+        boxShadow: open ? '-8px 0 24px rgba(0,0,0,0.45)' : 'none',
+        color: colors.text,
+        display: 'flex',
+        flexDirection: 'column',
+        zIndex: 6,
+        transform: open ? 'translateX(0)' : 'translateX(105%)',
+        transition: 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms ease',
+        pointerEvents: open ? 'auto' : 'none',
+      }}
+    >
+      {n && (
+        <>
+          {/* Header — title + type/degree + close. */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
+              padding: '12px 14px',
+              borderBottom: `1px solid ${colors.border}`,
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h3 style={{ margin: 0, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>{n.type === 'event' ? '📄 Event' : '🔖 Entity'}</span>
+                <span style={{ color: colors.dim, fontWeight: 400, fontSize: 12 }}>· deg {degree}</span>
+              </h3>
+              <div style={{ marginTop: 4, fontSize: 12, color: colors.text2, wordBreak: 'break-word' }}>
+                {n.label}
+              </div>
+              {n.kind && (
+                <div style={{ marginTop: 2, fontSize: 11 }}>
+                  <span style={{ color: kindColors[n.kind] || colors.accent }}>{n.kind}</span>
+                </div>
+              )}
+              {n.entityType && (
+                <div style={{ marginTop: 2, fontSize: 11 }}>
+                  <span style={{ color: entityColor(n.entityType) }}>{n.entityType}</span>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={onClose}
+              title="Close"
+              style={{
+                flexShrink: 0,
+                width: 26,
+                height: 26,
+                borderRadius: 5,
+                border: `1px solid ${colors.border}`,
+                background: colors.base,
+                color: colors.text2,
+                cursor: 'pointer',
+                fontSize: 13,
+                lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Body — scrollable. The detail content moved verbatim from the old
+              sidebar card (id row + the entity/event/lineage drill-downs). */}
+          <div style={{ flex: 1, overflow: 'auto', padding: 14, fontSize: 13 }}>
+            <p style={{ margin: '0 0 8px', wordBreak: 'break-all', fontSize: 12, color: colors.dim }}>
+              <strong style={{ color: colors.text2 }}>ID:</strong> {n.id}
+            </p>
+
+            {/* ENTITY drill-down — stats, connected events, co-occurring entities. */}
+            {selectedIsEntity && (
+              <div style={{ marginTop: 4, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
+                {entityDetailLoading ? (
+                  <div style={{ fontSize: 12, color: colors.dim }}>Loading entity…</div>
+                ) : entityDetail ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <EntityStats detail={entityDetail} />
+                    <DetailGroup title="Events" count={entityDetail.events.length}>
+                      {entityDetail.events.map((ev) => (
+                        <EventRow
+                          key={ev.eventId}
+                          ev={ev}
+                          onClick={() =>
+                            pivotTo({ id: ev.eventId, type: 'event', label: ev.title || ev.eventId, kind: undefined })
+                          }
+                        />
+                      ))}
+                    </DetailGroup>
+                    <DetailGroup title="Related entities" count={entityDetail.relatedEntities.length}>
+                      {entityDetail.relatedEntities.map((re) => (
+                        <RelatedEntityRow
+                          key={re.id}
+                          re={re}
+                          onClick={() =>
+                            pivotTo({ id: re.id, type: 'entity', label: re.value || re.id, entityType: re.type })
+                          }
+                        />
+                      ))}
+                    </DetailGroup>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: colors.muted }}>no detail</div>
+                )}
+              </div>
+            )}
+
+            {/* EVENT drill-down — extracted entities (above the lineage panel). */}
+            {selectedIsEvent && (
+              <div style={{ marginTop: 4, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
+                <h4 style={{ margin: '0 0 6px', fontSize: 12, color: colors.dim }}>Entities</h4>
+                {eventDetailLoading ? (
+                  <div style={{ fontSize: 12, color: colors.dim }}>Loading entities…</div>
+                ) : eventDetail && eventDetail.entities.length > 0 ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {eventDetail.entities.map((en) => (
+                      <button
+                        key={en.id}
+                        onClick={() => pivotTo({ id: en.id, type: 'entity', label: en.value || en.id, entityType: en.type })}
+                        title={en.context || `${en.type} · ${en.value}`}
+                        style={chipBtnStyle(entityColor(en.type))}
+                      >
+                        <span style={{ color: entityColor(en.type) }}>{en.value || en.id}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: colors.muted }}>no entities</div>
+                )}
+              </div>
+            )}
+
+            {/* 006 lineage drill-down — only meaningful for event nodes. */}
+            {selectedIsEvent && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
+                <h4 style={{ margin: '0 0 6px', fontSize: 12, color: colors.dim }}>Lineage</h4>
+                {lineageLoading ? (
+                  <div style={{ fontSize: 12, color: colors.dim }}>Loading lineage…</div>
+                ) : hasLineage ? (
+                  <LineagePanel lineage={lineage!} />
+                ) : (
+                  <div style={{ fontSize: 12, color: colors.muted }}>no lineage</div>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

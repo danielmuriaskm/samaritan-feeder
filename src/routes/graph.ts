@@ -7,7 +7,7 @@ import { toGexf, toSigmaJson, parentChildToTree, type GraphNode, type GraphEdge 
 const app = new Hono();
 
 // Node shape assembled by the /network route (see below).
-type NetworkNode = { id: string; type: 'event' | 'entity'; label: string; kind?: string; entityType?: string };
+type NetworkNode = { id: string; type: 'event' | 'entity'; label: string; kind?: string; entityType?: string; time?: number };
 type NetworkLink = { source: string; target: string; confidence: number };
 
 /**
@@ -133,7 +133,9 @@ app.get('/network', async (c) => {
   const includeLineage = c.req.query('includeLineage') === 'true';
   const root = c.req.query('root'); // required for format=tree
 
-  const nodes: Array<{ id: string; type: 'event' | 'entity'; label: string; kind?: string; entityType?: string }> = [];
+  // `time` (event_at for events, last_seen_at for entities) drives the client-side
+  // time-range brush.
+  const nodes: Array<{ id: string; type: 'event' | 'entity'; label: string; kind?: string; entityType?: string; time?: number }> = [];
   const links: Array<{ source: string; target: string; confidence: number }> = [];
   const seenNodes = new Set<string>();
   const seenLinks = new Set<string>();
@@ -144,13 +146,13 @@ app.get('/network', async (c) => {
     const event = await getEvent(eventId);
     if (!event) return c.json({ error: 'Event not found' }, 404);
 
-    nodes.push({ id: event.id, type: 'event', label: event.title ?? event.kind, kind: event.kind });
+    nodes.push({ id: event.id, type: 'event', label: event.title ?? event.kind, kind: event.kind, time: event.eventAt });
     seenNodes.add(event.id);
 
     const entities = await getEventEntities(eventId);
     for (const e of entities) {
       if (!seenNodes.has(e.id)) {
-        nodes.push({ id: e.id, type: 'entity', label: e.value, entityType: e.type });
+        nodes.push({ id: e.id, type: 'entity', label: e.value, entityType: e.type, time: e.lastSeenAt });
         seenNodes.add(e.id);
       }
       const linkKey = `${event.id}-${e.id}`;
@@ -183,14 +185,14 @@ app.get('/network', async (c) => {
     if (!entity) continue;
 
     if (!seenNodes.has(entity.id)) {
-      nodes.push({ id: entity.id, type: 'entity', label: entity.value, entityType: entity.type });
+      nodes.push({ id: entity.id, type: 'entity', label: entity.value, entityType: entity.type, time: entity.lastSeenAt });
       seenNodes.add(entity.id);
     }
 
     const events = await getEntityEvents(entityId);
     for (const ev of events.slice(0, 20)) { // cap events per entity to avoid explosion
       if (!seenNodes.has(ev.eventId)) {
-        nodes.push({ id: ev.eventId, type: 'event', label: ev.title ?? 'Event', kind: undefined });
+        nodes.push({ id: ev.eventId, type: 'event', label: ev.title ?? 'Event', kind: undefined, time: ev.eventAt });
         seenNodes.add(ev.eventId);
       }
       const linkKey = `${ev.eventId}-${entity.id}`;
