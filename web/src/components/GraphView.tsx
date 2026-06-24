@@ -62,6 +62,49 @@ function GraphError({ message }: { message: string }) {
   );
 }
 
+// Absolutely-positioned zoom-control cluster over the canvas (Fit / + / −).
+const zoomClusterStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 12,
+  right: 12,
+  zIndex: 5,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+};
+const zoomBtnStyle: React.CSSProperties = {
+  width: 30,
+  height: 30,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 4,
+  border: `1px solid ${colors.border}`,
+  background: colors.panel,
+  color: colors.text,
+  fontSize: 16,
+  lineHeight: 1,
+  cursor: 'pointer',
+};
+// Focus-mode banner (top-left over the canvas) doubling as a "clear focus" button.
+const focusHintStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 12,
+  left: 12,
+  zIndex: 5,
+  padding: '5px 10px',
+  borderRadius: 4,
+  border: `1px solid ${colors.border}`,
+  background: colors.panel,
+  color: colors.text,
+  fontSize: 12,
+  cursor: 'pointer',
+  maxWidth: 320,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
 // Shared button-style for the export anchors + toggle pills, matching the dark wm-* look.
 const exportLinkStyle = (disabled: boolean): React.CSSProperties => ({
   display: 'block',
@@ -88,6 +131,11 @@ export default function GraphView() {
   // 006 graph toggles.
   const [entityOnly, setEntityOnly] = useState(false);
   const [includeLineage, setIncludeLineage] = useState(false);
+  // Declutter toggles — applied client-side to the rendered set (not the fetch).
+  // hideIsolated drops degree-0 nodes (loose floating dots); ON by default.
+  // hideWeak ALSO drops degree-1 leaf EVENT nodes (single-entity "flowers").
+  const [hideIsolated, setHideIsolated] = useState(true);
+  const [hideWeak, setHideWeak] = useState(false);
   // 006 lineage drill-down for the selected EVENT node.
   const [lineage, setLineage] = useState<Lineage | null>(null);
   const [lineageLoading, setLineageLoading] = useState(false);
@@ -158,19 +206,55 @@ export default function GraphView() {
   const linkEndId = (e: unknown): string =>
     e && typeof e === 'object' ? String((e as { id: unknown }).id) : String(e);
 
+  // Build the rendered node/link set in three passes:
+  //   1. entity-type filter (search no longer filters — it highlights + centers).
+  //   2. keep only links whose BOTH ends survived the filter (mutation-safe ids).
+  //   3. declutter by degree: drop isolated (deg 0) and, if enabled, weak leaf
+  //      EVENT nodes (deg 1), recomputing the link set after each prune so the
+  //      degree map and the rendered edges stay consistent.
   const { filteredNodes, filteredLinks } = useMemo(() => {
-    const nodes = data.nodes.filter((n) => {
+    // Pass 1 — entity-type filter only.
+    let nodes = data.nodes.filter((n) => {
       if (entityTypeFilter !== 'all' && n.type === 'entity' && n.entityType !== entityTypeFilter) return false;
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q);
-      }
       return true;
     });
-    const ids = new Set(nodes.map((n) => n.id));
-    const links = data.links.filter((l) => ids.has(linkEndId(l.source)) && ids.has(linkEndId(l.target)));
+
+    // Helper: keep links wholly inside the current node set, and compute degree.
+    const linksWithin = (ns: GraphNode[]): { links: GraphLink[]; deg: Map<string, number> } => {
+      const ids = new Set(ns.map((n) => n.id));
+      const links = data.links.filter((l) => ids.has(linkEndId(l.source)) && ids.has(linkEndId(l.target)));
+      const deg = new Map<string, number>();
+      for (const l of links) {
+        const s = linkEndId(l.source);
+        const t = linkEndId(l.target);
+        deg.set(s, (deg.get(s) ?? 0) + 1);
+        deg.set(t, (deg.get(t) ?? 0) + 1);
+      }
+      return { links, deg };
+    };
+
+    let { links, deg } = linksWithin(nodes);
+
+    // Pass 3a — hide isolated (degree-0) nodes. Default ON.
+    if (hideIsolated) {
+      nodes = nodes.filter((n) => (deg.get(n.id) ?? 0) > 0);
+      ({ links, deg } = linksWithin(nodes));
+    }
+
+    // Pass 3b — hide weak: drop degree-1 leaf EVENT nodes (single-entity flowers),
+    // keeping the connected backbone. Recompute again so a node that becomes
+    // isolated after its leaf is removed is handled consistently with hideIsolated.
+    if (hideWeak) {
+      nodes = nodes.filter((n) => !(n.type === 'event' && (deg.get(n.id) ?? 0) <= 1));
+      ({ links, deg } = linksWithin(nodes));
+      if (hideIsolated) {
+        nodes = nodes.filter((n) => (deg.get(n.id) ?? 0) > 0);
+        ({ links } = linksWithin(nodes));
+      }
+    }
+
     return { filteredNodes: nodes, filteredLinks: links };
-  }, [data, entityTypeFilter, searchQuery]);
+  }, [data, entityTypeFilter, hideIsolated, hideWeak]);
 
   // Stable graphData reference so ForceGraph only re-processes (and re-mutates)
   // when the filtered set actually changes — not on every unrelated re-render.
@@ -186,13 +270,64 @@ export default function GraphView() {
   const degree = useMemo(() => {
     const d = new Map<string, number>();
     for (const l of filteredLinks) {
-      const s = typeof l.source === 'object' ? String((l.source as { id: unknown }).id) : String(l.source);
-      const t = typeof l.target === 'object' ? String((l.target as { id: unknown }).id) : String(l.target);
+      const s = linkEndId(l.source);
+      const t = linkEndId(l.target);
       d.set(s, (d.get(s) ?? 0) + 1);
       d.set(t, (d.get(t) ?? 0) + 1);
     }
     return d;
   }, [filteredLinks]);
+
+  // Search no longer prunes the graph — it highlights matching nodes (ring) and
+  // centers the view on the first match. Empty query = no matches highlighted.
+  const matchIds = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return new Set<string>();
+    return new Set(
+      filteredNodes
+        .filter((n) => n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q))
+        .map((n) => n.id),
+    );
+  }, [filteredNodes, searchQuery]);
+
+  // FOCUS MODE: when a node is selected, compute its direct (1-hop) neighbor set
+  // from the (mutation-safe) links so we can dim everything else. Includes the
+  // selected node itself. Empty when nothing is selected (no dimming).
+  const focusIds = useMemo(() => {
+    if (!selectedNode) return null;
+    const set = new Set<string>([selectedNode.id]);
+    for (const l of filteredLinks) {
+      const s = linkEndId(l.source);
+      const t = linkEndId(l.target);
+      if (s === selectedNode.id) set.add(t);
+      else if (t === selectedNode.id) set.add(s);
+    }
+    return set;
+  }, [selectedNode, filteredLinks]);
+
+  // SEARCH-TO-CENTER: when the query produces matches, pan the camera to the
+  // first match and nudge the zoom in so it's visibly framed. Debounced via the
+  // effect dependency on the (memoized) match set so it fires on each new query,
+  // not on every render. The node's x/y are populated by the force engine.
+  useEffect(() => {
+    if (!matchIds.size || !fgRef.current) return;
+    const first = filteredNodes.find((n) => matchIds.has(n.id)) as (GraphNode & { x?: number; y?: number }) | undefined;
+    if (!first || typeof first.x !== 'number' || typeof first.y !== 'number') return;
+    const t = setTimeout(() => {
+      fgRef.current?.centerAt(first.x, first.y, 600);
+      fgRef.current?.zoom(Math.max(2.4, fgRef.current.zoom?.() ?? 1), 600);
+    }, 60);
+    return () => clearTimeout(t);
+  }, [matchIds, filteredNodes]);
+
+  // Zoom controls wired to the imperative ForceGraph handle.
+  const zoomFit = useCallback(() => fgRef.current?.zoomToFit(400, 60), []);
+  const zoomBy = useCallback((factor: number) => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const cur = typeof fg.zoom === 'function' ? fg.zoom() : 1;
+    fg.zoom(cur * factor, 300);
+  }, []);
 
   const nodeFill = useCallback(
     (n: GraphNode): string => (n.type === 'entity' ? entityColor(n.entityType) : kindColors[n.kind || ''] || colors.dim),
@@ -260,9 +395,45 @@ export default function GraphView() {
           </label>
         </div>
 
+        {/* Declutter toggles — applied client-side, no re-fetch. */}
+        <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <h4 style={{ margin: '0 0 0', fontSize: 12, color: colors.dim }}>Declutter</h4>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={hideIsolated}
+              onChange={(e) => setHideIsolated(e.target.checked)}
+            />
+            <span>Hide isolated<span style={{ color: colors.dim }}> (no links)</span></span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={hideWeak}
+              onChange={(e) => setHideWeak(e.target.checked)}
+            />
+            <span>Hide weak<span style={{ color: colors.dim }}> (leaf events)</span></span>
+          </label>
+        </div>
+
         <div style={{ fontSize: 12, color: colors.dim, marginBottom: 12 }}>
           Nodes: {filteredNodes.length} | Links: {filteredLinks.length}
+          {matchIds.size > 0 && (
+            <span style={{ color: colors.teal }}> · {matchIds.size} match{matchIds.size === 1 ? '' : 'es'}</span>
+          )}
+          {selectedNode && (
+            <span style={{ color: colors.info }}> · focus on</span>
+          )}
         </div>
+
+        {selectedNode && (
+          <button
+            onClick={() => setSelectedNode(null)}
+            style={{ width: '100%', padding: '6px 10px', background: colors.base, color: colors.text, border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', marginBottom: 12, fontSize: 12 }}
+          >
+            ✕ Clear focus
+          </button>
+        )}
 
         <button
           onClick={loadNetwork}
@@ -378,53 +549,120 @@ export default function GraphView() {
         )}
 
         {hasData && (
-          <Suspense fallback={<GraphFallback />}>
-            <ErrorBoundary fallback={<GraphError message="Graph rendering failed" />}>
-              <ForceGraph2D
-                ref={fgRef}
-                graphData={graphData}
-                nodeLabel="label"
-                nodeVal={(n: any) => nodeRadius(n)}
-                linkColor={() => `rgba(${rgb(colors.text)}, 0.18)`}
-                linkWidth={(l: any) => (l.confidence ?? 0.5) * 1.5}
-                backgroundColor={colors.base}
-                onNodeClick={(n: any) => setSelectedNode(n as GraphNode)}
-                nodeCanvasObjectMode={() => 'replace'}
-                nodeCanvasObject={(n: any, ctx: CanvasRenderingContext2D, scale: number) => {
-                  const r = nodeRadius(n);
-                  ctx.beginPath();
-                  ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
-                  ctx.fillStyle = nodeFill(n);
-                  ctx.fill();
-                  if (selectedNode?.id === n.id) {
-                    ctx.lineWidth = 2 / scale;
-                    ctx.strokeStyle = '#fff';
-                    ctx.stroke();
-                  }
-                  // Label when zoomed in, or always for hub nodes (degree >= 5).
-                  const deg = degree.get(n.id) ?? 0;
-                  if (n.label && (scale > 1.6 || deg >= 5)) {
-                    const fontSize = Math.max(2.5, 11 / scale);
-                    ctx.font = `${fontSize}px sans-serif`;
-                    ctx.fillStyle = `rgba(${rgb(colors.text)}, 0.85)`;
-                    ctx.textAlign = 'left';
-                    ctx.textBaseline = 'middle';
-                    const label = n.label.length > 28 ? `${n.label.slice(0, 27)}…` : n.label;
-                    ctx.fillText(label, n.x + r + 1.5, n.y);
-                  }
-                }}
-                nodePointerAreaPaint={(n: any, color: string, ctx: CanvasRenderingContext2D) => {
-                  ctx.fillStyle = color;
-                  ctx.beginPath();
-                  ctx.arc(n.x, n.y, nodeRadius(n) + 2, 0, 2 * Math.PI);
-                  ctx.fill();
-                }}
-                warmupTicks={20}
-                cooldownTicks={80}
-                onEngineStop={() => fgRef.current?.zoomToFit(400, 60)}
-              />
-            </ErrorBoundary>
-          </Suspense>
+          <>
+            {/* Zoom-control cluster, absolutely positioned over the canvas. */}
+            <div style={zoomClusterStyle}>
+              <button style={zoomBtnStyle} title="Fit graph to view" onClick={zoomFit}>⤢</button>
+              <button style={zoomBtnStyle} title="Zoom in" onClick={() => zoomBy(1.4)}>+</button>
+              <button style={zoomBtnStyle} title="Zoom out" onClick={() => zoomBy(1 / 1.4)}>−</button>
+            </div>
+
+            {/* Focus-mode hint, shown while a node is selected. */}
+            {selectedNode && (
+              <button
+                onClick={() => setSelectedNode(null)}
+                style={focusHintStyle}
+                title="Exit focus mode"
+              >
+                Focusing on {selectedNode.label.length > 22 ? `${selectedNode.label.slice(0, 21)}…` : selectedNode.label} · ✕ clear
+              </button>
+            )}
+
+            <Suspense fallback={<GraphFallback />}>
+              <ErrorBoundary fallback={<GraphError message="Graph rendering failed" />}>
+                <ForceGraph2D
+                  ref={fgRef}
+                  graphData={graphData}
+                  nodeLabel="label"
+                  nodeVal={(n: any) => nodeRadius(n)}
+                  linkColor={(l: any) => {
+                    // FOCUS MODE: only links between the selected node and its
+                    // direct neighbors stay bright; everything else fades.
+                    if (focusIds) {
+                      const s = linkEndId(l.source);
+                      const t = linkEndId(l.target);
+                      const lit = focusIds.has(s) && focusIds.has(t);
+                      return `rgba(${rgb(colors.text)}, ${lit ? 0.32 : 0.04})`;
+                    }
+                    return `rgba(${rgb(colors.text)}, 0.18)`;
+                  }}
+                  linkWidth={(l: any) => (l.confidence ?? 0.5) * 1.5}
+                  backgroundColor={colors.base}
+                  onNodeClick={(n: any) => setSelectedNode(n as GraphNode)}
+                  onBackgroundClick={() => setSelectedNode(null)}
+                  nodeCanvasObjectMode={() => 'replace'}
+                  nodeCanvasObject={(n: any, ctx: CanvasRenderingContext2D, scale: number) => {
+                    const r = nodeRadius(n);
+                    const isMatch = matchIds.has(n.id);
+                    // FOCUS MODE alpha: dim everything outside the 1-hop set.
+                    const dimmed = focusIds ? !focusIds.has(n.id) : false;
+                    const alpha = dimmed ? 0.12 : 1;
+                    ctx.globalAlpha = alpha;
+
+                    ctx.beginPath();
+                    ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
+                    ctx.fillStyle = nodeFill(n);
+                    ctx.fill();
+
+                    // Search-match ring (teal) — drawn even when dimmed so the
+                    // operator can still spot matches in a focused view.
+                    if (isMatch) {
+                      ctx.globalAlpha = 1;
+                      ctx.lineWidth = 2 / scale;
+                      ctx.strokeStyle = colors.teal;
+                      ctx.beginPath();
+                      ctx.arc(n.x, n.y, r + 2 / scale, 0, 2 * Math.PI);
+                      ctx.stroke();
+                      ctx.globalAlpha = alpha;
+                    }
+
+                    // Selected node gets a white outline.
+                    if (selectedNode?.id === n.id) {
+                      ctx.globalAlpha = 1;
+                      ctx.lineWidth = 2 / scale;
+                      ctx.strokeStyle = '#fff';
+                      ctx.beginPath();
+                      ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
+                      ctx.stroke();
+                      ctx.globalAlpha = alpha;
+                    }
+
+                    // Labels: always for ENTITY nodes and hubs (degree >= 5),
+                    // zoom-gated for everyone else, plus always for matches. A
+                    // dark text-halo (stroke behind fill) keeps them legible
+                    // over links. Dimmed nodes don't draw labels (declutter).
+                    const deg = degree.get(n.id) ?? 0;
+                    const alwaysLabel = n.type === 'entity' || deg >= 5 || isMatch;
+                    if (n.label && !dimmed && (alwaysLabel || scale > 1.6)) {
+                      const fontSize = Math.max(2.5, 11 / scale);
+                      ctx.font = `${fontSize}px sans-serif`;
+                      ctx.textAlign = 'left';
+                      ctx.textBaseline = 'middle';
+                      const label = n.label.length > 28 ? `${n.label.slice(0, 27)}…` : n.label;
+                      const lx = n.x + r + 1.5;
+                      // Halo behind the text.
+                      ctx.lineWidth = Math.max(1, 3 / scale);
+                      ctx.strokeStyle = `rgba(${rgb(colors.base)}, 0.85)`;
+                      ctx.lineJoin = 'round';
+                      ctx.strokeText(label, lx, n.y);
+                      ctx.fillStyle = isMatch ? colors.teal : `rgba(${rgb(colors.text)}, 0.9)`;
+                      ctx.fillText(label, lx, n.y);
+                    }
+                    ctx.globalAlpha = 1;
+                  }}
+                  nodePointerAreaPaint={(n: any, color: string, ctx: CanvasRenderingContext2D) => {
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(n.x, n.y, nodeRadius(n) + 2, 0, 2 * Math.PI);
+                    ctx.fill();
+                  }}
+                  warmupTicks={20}
+                  cooldownTicks={80}
+                  onEngineStop={() => fgRef.current?.zoomToFit(400, 60)}
+                />
+              </ErrorBoundary>
+            </Suspense>
+          </>
         )}
       </div>
     </div>

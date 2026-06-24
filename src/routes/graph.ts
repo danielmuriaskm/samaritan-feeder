@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { getEvent, getEventLineage } from '../store/events.js';
 import { getEntityById, getEventEntities, getEntityEvents, getRelatedEntities, searchEntities } from '../store/entities.js';
+import { isLowValueEntity } from '../processors/entityExtract.js';
 import { toGexf, toSigmaJson, parentChildToTree, type GraphNode, type GraphEdge } from '../lib/exporters.js';
 
 const app = new Hono();
@@ -165,10 +166,15 @@ app.get('/network', async (c) => {
     seedEntityIds.push(...entityIdsParam.split(','));
   }
 
-  // Default view: top entities by event count if no seed provided
+  // Default view: top entities by event count if no seed provided. Filter out
+  // generic/low-value entities ("ai", "data", stopwords) so the graph shows a
+  // meaningful entity backbone, not noisy hubs. Over-fetch then trim to `limit`.
   if (seedEntityIds.length === 0) {
-    const topEntities = await searchEntities({ limit });
-    seedEntityIds = topEntities.map((e) => e.id);
+    const topEntities = await searchEntities({ limit: limit * 3 });
+    seedEntityIds = topEntities
+      .filter((e) => !isLowValueEntity(e.type, e.value))
+      .slice(0, limit)
+      .map((e) => e.id);
   }
 
   // Expand 1 hop from seed entities

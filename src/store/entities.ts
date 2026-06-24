@@ -1,5 +1,5 @@
 import { query, one, exec, transact } from '../db.js';
-import type { ExtractedEntity } from '../processors/entityExtract.js';
+import { isLowValueEntity, type ExtractedEntity } from '../processors/entityExtract.js';
 
 export interface Entity {
   id: string;
@@ -96,6 +96,11 @@ export async function extractAndLinkEntities(event: { id: string; title?: string
       seen.add(key);
     }
   }
+
+  // Drop generic/low-value entities ("ai", "data", stopwords, ultra-short) so the
+  // intelligence graph isn't dominated by noisy hubs. Structured IOC types (ip,
+  // domain, email, hash, cve, …) are never filtered.
+  entities = entities.filter((e) => !isLowValueEntity(e.type, e.value));
 
   if (entities.length === 0) return;
 
