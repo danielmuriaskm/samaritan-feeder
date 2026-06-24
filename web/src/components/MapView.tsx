@@ -758,6 +758,33 @@ function MapBoundsListener({ onChange }: { onChange: (bounds: string, zoom: numb
   return null;
 }
 
+/**
+ * Fixes the Leaflet "wrong size" bug. The console (App.tsx) keeps every tab
+ * MOUNTED but `display:none` except the active one, so this map initializes at
+ * 0x0 while hidden — Leaflet then only loads a sliver of tiles and never
+ * recomputes. A ResizeObserver on the map container fires when the Map tab
+ * becomes visible (0 -> real size), when the sidebar is resized, and on window
+ * resize, each time calling invalidateSize() so Leaflet re-measures and fills the
+ * viewport. (The Samaritan radar map avoids this by being a route, not a tab.)
+ */
+function MapResizeFix() {
+  const map = useMap();
+  useEffect(() => {
+    const recompute = () => map.invalidateSize();
+    // The container may have been 0x0 at init (hidden tab); recompute now and on
+    // the next frame once layout has settled.
+    recompute();
+    const raf = requestAnimationFrame(recompute);
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(map.getContainer());
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [map]);
+  return null;
+}
+
 function ResizablePanel({
   width,
   onResize,
@@ -1592,6 +1619,7 @@ export default function MapView() {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+          <MapResizeFix />
           <MapBoundsListener onChange={(bounds, zoom) => { setBoundsStr(bounds); setMapZoom(zoom); }} />
           <MarkerClusterLayer cameras={filtered} onCameraClick={setSelectedCamera} />
           {showEvents && <EventLayer events={events} />}
