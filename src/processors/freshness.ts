@@ -1,5 +1,6 @@
 import type { SourceConfig, SourceHealthState, IntelSignal } from '../types.js';
 import { listSources } from '../store/sources.js';
+import { getAdapter } from '../adapters/index.js';
 import { insertSignal, isSuppressed } from '../store/signals.js';
 import { bus } from '../bus.js';
 import {
@@ -57,7 +58,12 @@ export const SILENCE_BUDGET_CEILING_MS = 14 * 24 * 60 * 60 * 1000;
 // Met Office, TfL, significant-quake feeds. Such a source is never flagged
 // silent purely for being quiet — silence is its normal resting state. We still
 // honor a genuine stall via the ceiling above once a baseline exists.
-export const EVENT_DRIVEN_MAX_PER_HOUR = 0.05; // ~<= 1 event per ~20h on average
+// Raised from 0.05 to 0.2 (~<= 1 event per ~5h, ~5/day): occasional bursts (an
+// earthquake swarm, a tornado outbreak) inflate the rolling mean of a genuinely
+// event-driven feed above 0.05, which then got a short cadence budget and was
+// wrongly flagged silent during its normal quiet stretches. 0.2 keeps real
+// firehoses (Reddit hot, RSS) well above the line while sparing advisory feeds.
+export const EVENT_DRIVEN_MAX_PER_HOUR = 0.2;
 
 // z-score past which a per-hour volume reading counts as anomalous vs baseline.
 export const VOLUME_Z_THRESHOLD = 3;
@@ -246,6 +252,10 @@ export async function runFreshnessSweep(now: number = Date.now()): Promise<{
   let anomalyCount = 0;
 
   for (const source of sources) {
+    // Skip sources whose kind has NO registered adapter: they can never poll, so
+    // "silent feed (may be dead or soft-blocked)" is the wrong story — they're
+    // unconfigured, not silent. Flagging them just floods the Signals view.
+    if (!getAdapter(source.kind)) continue;
     try {
       await sweepSource(source, now, (kind) => {
         if (kind === 'silent_source') silentCount++;
