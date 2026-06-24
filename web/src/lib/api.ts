@@ -159,6 +159,19 @@ export interface LineageNeighbor { eventId: string; relation: string; processor?
 export async function getLineage(eventId: string): Promise<{ parents: LineageNeighbor[]; children: LineageNeighbor[] }> {
   return getJSON<{ parents: LineageNeighbor[]; children: LineageNeighbor[] }>(`/graph/lineage/${encodeURIComponent(eventId)}`);
 }
+// Node drill-down (006): the connected events + co-occurring entities behind a node.
+export interface GraphEntity { id: string; type: string; value: string; firstSeenAt: number; lastSeenAt: number; eventCount: number; metadata?: Record<string, unknown> }
+export interface GraphEntityEvent { eventId: string; eventAt: number; title?: string; confidence: number }
+export interface GraphRelatedEntity extends GraphEntity { sharedEvents: number }
+export interface GraphEventEntity extends GraphEntity { linkConfidence: number; context?: string }
+/** An entity + its connected events + co-occurring (related) entities. */
+export async function getGraphEntity(id: string): Promise<{ entity: GraphEntity; events: GraphEntityEvent[]; relatedEntities: GraphRelatedEntity[] }> {
+  return getJSON(`/graph/entity/${encodeURIComponent(id)}`);
+}
+/** An event + its extracted entities + co-occurring events. */
+export async function getGraphEvent(id: string): Promise<{ event: IntelEvent; entities: GraphEventEntity[]; relatedEvents: IntelEvent[] }> {
+  return getJSON(`/graph/event/${encodeURIComponent(id)}`);
+}
 /** Download URL for the graph export (gexf/sigma/tree). tree requires root. */
 export function graphExportUrl(format: 'gexf' | 'sigma' | 'tree', opts: GraphOpts & { root?: string; maxDepth?: number } = {}): string {
   const url = new URL(BASE + '/graph/network', window.location.origin);

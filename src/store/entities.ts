@@ -18,6 +18,25 @@ export interface EventEntityLink {
   context?: string;
 }
 
+/**
+ * One-time recolor of the graph: the old guessEntityType default labeled EVERY
+ * bare LLM string 'domain' (blue), so the graph was a wall of identical nodes.
+ * Re-type the mislabeled ones — anything stored as 'domain' whose value is NOT a
+ * real dotted hostname becomes 'org' (the new default). Real domains (with a
+ * .TLD) are left alone. Idempotent; new ingest gets finer place/product/tech
+ * types. Returns rows changed.
+ */
+export async function backfillEntityTypes(): Promise<number> {
+  const rows = await query<{ count: string }>(
+    `WITH u AS (
+       UPDATE intelligence_entities SET type = 'org'
+        WHERE type = 'domain' AND value !~* '\\.[a-z]{2,}$'
+        RETURNING 1
+     ) SELECT COUNT(*)::text AS count FROM u`,
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
 export async function upsertEntity(entity: ExtractedEntity, now: number): Promise<string> {
   const existing = await one<{ id: string }>(
     `SELECT id FROM intelligence_entities WHERE type = $1 AND value = $2`,
@@ -77,7 +96,7 @@ export async function extractAndLinkEntities(event: { id: string; title?: string
         const obj = e as Record<string, unknown>;
         if (typeof obj.value === 'string' && typeof obj.type === 'string') {
           entities.push({
-            type: obj.type as ExtractedEntity['type'],
+            type: normalizeEntityType(obj.type, obj.value),
             value: obj.value.toLowerCase().trim(),
             confidence: Number(obj.confidence ?? 0.7),
           });
@@ -224,7 +243,35 @@ function guessEntityType(value: string): ExtractedEntity['type'] {
   if (/^(?:ua-\d{4,10}-\d{1,4}|g-[a-z0-9]{6,12}|gtm-[a-z0-9]{5,9}|pub-\d{14,22})$/i.test(v)) return 'analytics_id';
   // IBAN: structural check + mod-97 checksum.
   if (/^[a-z]{2}\d{2}[a-z0-9]{11,30}$/i.test(v) && isValidIbanChecksum(raw)) return 'iban';
-  return 'domain';
+  // A dotted hostname with a TLD is a real domain. Otherwise a bare string from a
+  // news post (e.g. "OpenAI", "France") is almost always an org/name — default to
+  // 'org', NOT 'domain' (the old default painted every untyped entity the same
+  // blue, which is why the graph was a wall of identical nodes).
+  if (/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(v) && !/\s/.test(v)) return 'domain';
+  return 'org';
+}
+
+/**
+ * Fold an LLM-supplied entity `type` onto our controlled vocabulary so graph node
+ * colors are meaningful. Structured IOC types pass through; free-text labels are
+ * synonym-mapped to org/person/place/product/tech; anything unrecognized falls
+ * back to value-based guessEntityType (which now defaults to 'org').
+ */
+function normalizeEntityType(rawType: unknown, value: string): ExtractedEntity['type'] {
+  const t = String(rawType ?? '').toLowerCase().trim();
+  const structured = new Set([
+    'ipv4', 'ipv6', 'domain', 'email', 'hash_md5', 'hash_sha1', 'hash_sha256', 'hash_sha512',
+    'cve', 'asn', 'btc_address', 'eth_address', 'iban', 'credit_card', 'analytics_id', 'pgp_key', 'url',
+  ]);
+  if (structured.has(t)) return t as ExtractedEntity['type'];
+  if (t === 'ip') return 'ipv4';
+  if (t === 'hash') return 'hash_sha256';
+  if (['org', 'organization', 'organisation', 'company', 'corporation', 'agency', 'government', 'institution', 'team', 'startup', 'brand'].includes(t)) return 'org';
+  if (['person', 'people', 'individual', 'name', 'author', 'user'].includes(t)) return 'person';
+  if (['place', 'location', 'country', 'city', 'region', 'gpe', 'geo', 'area'].includes(t)) return 'place';
+  if (['product', 'app', 'application', 'service', 'model', 'tool', 'platform', 'device'].includes(t)) return 'product';
+  if (['tech', 'technology', 'framework', 'language', 'protocol', 'library', 'standard', 'concept', 'topic', 'keyword'].includes(t)) return 'tech';
+  return guessEntityType(value);
 }
 
 /**

@@ -17,7 +17,7 @@ import { runConvergence } from './processors/convergence.js';
 import { runFreshnessSweep } from './processors/freshness.js';
 import { runDigestCycle as synthDigestCycle } from './processors/briefSynth.js';
 import { tagLocation } from './geo/countryResolver.js';
-import { extractAndLinkEntities } from './store/entities.js';
+import { extractAndLinkEntities, backfillEntityTypes } from './store/entities.js';
 import { runDomainRecon } from './processors/reconDomain.js';
 import { runIpEnrichment } from './processors/reconIp.js';
 import { runEmailBreachCheck } from './processors/reconEmail.js';
@@ -147,6 +147,13 @@ export function startScheduler(): void {
   void runLineageSweep(Date.now() - 7 * 24 * 60 * 60 * 1000)
     .then((r) => { if (r.edges || r.classified) console.log(`[scheduler] Startup lineage sweep: ${r.edges} edges, ${r.classified} classified`); })
     .catch(() => {});
+
+  // One-time recolor of existing entities mislabeled 'domain' by the old default
+  // -> 'org', so the graph stops being a wall of identical blue nodes immediately
+  // (not only as new events flow in). Idempotent.
+  void backfillEntityTypes()
+    .then((n) => { if (n) console.log(`[scheduler] Re-typed ${n} entities (domain -> org)`); })
+    .catch((err) => console.error('[scheduler] Entity type backfill failed:', err instanceof Error ? err.message : String(err)));
 
   console.log('[scheduler] Started (poll: 1min, cleanup: 3am, digest: hourly, cluster: 15min, convergence: 5min, freshness: 10min, rules: 5min, lineage: 15min, geocode: 10min)');
 }
