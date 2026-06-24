@@ -27,10 +27,16 @@ export interface EventEntityLink {
  * types. Returns rows changed.
  */
 export async function backfillEntityTypes(): Promise<number> {
+  // Skip values that ALREADY have an 'org' row — intelligence_entities has a
+  // UNIQUE(type, value), so re-typing a 'domain' dup of an existing 'org' would
+  // violate it. Those few keep their (redundant) domain row; the bulk recolors.
   const rows = await query<{ count: string }>(
     `WITH u AS (
-       UPDATE intelligence_entities SET type = 'org'
-        WHERE type = 'domain' AND value !~* '\\.[a-z]{2,}$'
+       UPDATE intelligence_entities t SET type = 'org'
+        WHERE t.type = 'domain' AND t.value !~* '\\.[a-z]{2,}$'
+          AND NOT EXISTS (
+            SELECT 1 FROM intelligence_entities o WHERE o.type = 'org' AND o.value = t.value
+          )
         RETURNING 1
      ) SELECT COUNT(*)::text AS count FROM u`,
   );
