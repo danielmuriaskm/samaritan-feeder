@@ -206,11 +206,13 @@ export default function SignalsPanel() {
     if (next) refreshMutes();
   }
 
-  async function onTriage(sig: IntelSignal, state: TriageState) {
+  async function onTriage(sig: IntelSignal & { groupIds?: string[] }, state: TriageState) {
+    // Act on every firing collapsed under this card (one Dismiss clears them all).
+    const ids = sig.groupIds?.length ? sig.groupIds : [sig.id];
     setBusyId(sig.id);
     setError(null);
     try {
-      await setSignalTriage(sig.id, state);
+      await Promise.all(ids.map((id) => setSignalTriage(id, state)));
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update triage');
@@ -281,17 +283,31 @@ export default function SignalsPanel() {
     }
   }
 
-  // Filter (kind multiselect + minScore), then bucket by kind, score-sorted desc.
+  // Filter (kind multiselect + minScore), bucket by kind, then COLLAPSE repeats
+  // that share a dedupe key (e.g. a feed that went silent and re-fired over many
+  // days) into ONE card: the latest representative + a fired-count + the full id
+  // list, so a single Acknowledge/Dismiss clears the whole group.
   const groups = useMemo(() => {
     const filtered = signals.filter(
       (s) => s.score >= minScore && (kinds.length === 0 || kinds.includes(s.kind)),
     );
-    return KIND_ORDER.map((kind) => ({
-      kind,
-      items: filtered
-        .filter((s) => s.kind === kind)
-        .sort((a, b) => b.score - a.score),
-    })).filter((g) => g.items.length > 0);
+    return KIND_ORDER.map((kind) => {
+      const byKey = new Map<string, IntelSignal[]>();
+      for (const s of filtered) {
+        if (s.kind !== kind) continue;
+        const key = s.dedupeKey || `${s.kind}::${s.title}`;
+        const arr = byKey.get(key);
+        if (arr) arr.push(s);
+        else byKey.set(key, [s]);
+      }
+      const items = [...byKey.values()]
+        .map((arr) => {
+          arr.sort((a, b) => b.createdAt - a.createdAt); // latest is the representative
+          return { ...arr[0], count: arr.length, groupIds: arr.map((s) => s.id) };
+        })
+        .sort((a, b) => b.score - a.score);
+      return { kind, items };
+    }).filter((g) => g.items.length > 0);
   }, [signals, kinds, minScore]);
 
   const totalShown = groups.reduce((n, g) => n + g.items.length, 0);
@@ -483,6 +499,15 @@ export default function SignalsPanel() {
                       >
                         <span style={{ fontSize: 11, color: 'var(--wm-dim)', width: 12 }}>{isOpen ? '▾' : '▸'}</span>
                         <span style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{sig.title}</span>
+                        {sig.count > 1 && (
+                          <span
+                            className="wm-chip"
+                            style={{ color: colors.dim, borderColor: colors.dim, fontVariantNumeric: 'tabular-nums' }}
+                            title={`Fired ${sig.count} times — collapsed; Dismiss clears all`}
+                          >
+                            ×{sig.count}
+                          </span>
+                        )}
                         {sig.riskBand && (
                           <span
                             className="wm-chip"

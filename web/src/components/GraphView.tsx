@@ -181,6 +181,28 @@ export default function GraphView() {
     [data],
   );
 
+  // Node degree (link count) — drives node size so hubs stand out, and gates
+  // labels so dense areas aren't unreadable.
+  const degree = useMemo(() => {
+    const d = new Map<string, number>();
+    for (const l of filteredLinks) {
+      const s = typeof l.source === 'object' ? String((l.source as { id: unknown }).id) : String(l.source);
+      const t = typeof l.target === 'object' ? String((l.target as { id: unknown }).id) : String(l.target);
+      d.set(s, (d.get(s) ?? 0) + 1);
+      d.set(t, (d.get(t) ?? 0) + 1);
+    }
+    return d;
+  }, [filteredLinks]);
+
+  const nodeFill = useCallback(
+    (n: GraphNode): string => (n.type === 'entity' ? entityColor(n.entityType) : kindColors[n.kind || ''] || colors.dim),
+    [],
+  );
+  const nodeRadius = useCallback(
+    (n: GraphNode): number => (n.type === 'event' ? 3 : 2.5) + Math.min(6, Math.sqrt(degree.get(n.id) ?? 0)),
+    [degree],
+  );
+
   const hasData = !loading && filteredNodes.length > 0;
   const isEmpty = !loading && filteredNodes.length === 0 && !error;
 
@@ -361,21 +383,45 @@ export default function GraphView() {
               <ForceGraph2D
                 ref={fgRef}
                 graphData={graphData}
-                nodeAutoColorBy="type"
                 nodeLabel="label"
-                nodeColor={(n: any) => {
-                  if (n.type === 'entity') return entityColor(n.entityType);
-                  return kindColors[n.kind || ''] || colors.dim;
-                }}
-                nodeVal={(n: any) => (n.type === 'event' ? 6 : 4)}
-                linkColor={() => `rgba(${rgb(colors.text)}, 0.2)`}
-                linkWidth={(l: any) => (l.confidence ?? 0.5) * 2}
+                nodeVal={(n: any) => nodeRadius(n)}
+                linkColor={() => `rgba(${rgb(colors.text)}, 0.18)`}
+                linkWidth={(l: any) => (l.confidence ?? 0.5) * 1.5}
                 backgroundColor={colors.base}
                 onNodeClick={(n: any) => setSelectedNode(n as GraphNode)}
-                warmupTicks={10}
-                cooldownTicks={50}
-                width={undefined}
-                height={undefined}
+                nodeCanvasObjectMode={() => 'replace'}
+                nodeCanvasObject={(n: any, ctx: CanvasRenderingContext2D, scale: number) => {
+                  const r = nodeRadius(n);
+                  ctx.beginPath();
+                  ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
+                  ctx.fillStyle = nodeFill(n);
+                  ctx.fill();
+                  if (selectedNode?.id === n.id) {
+                    ctx.lineWidth = 2 / scale;
+                    ctx.strokeStyle = '#fff';
+                    ctx.stroke();
+                  }
+                  // Label when zoomed in, or always for hub nodes (degree >= 5).
+                  const deg = degree.get(n.id) ?? 0;
+                  if (n.label && (scale > 1.6 || deg >= 5)) {
+                    const fontSize = Math.max(2.5, 11 / scale);
+                    ctx.font = `${fontSize}px sans-serif`;
+                    ctx.fillStyle = `rgba(${rgb(colors.text)}, 0.85)`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    const label = n.label.length > 28 ? `${n.label.slice(0, 27)}…` : n.label;
+                    ctx.fillText(label, n.x + r + 1.5, n.y);
+                  }
+                }}
+                nodePointerAreaPaint={(n: any, color: string, ctx: CanvasRenderingContext2D) => {
+                  ctx.fillStyle = color;
+                  ctx.beginPath();
+                  ctx.arc(n.x, n.y, nodeRadius(n) + 2, 0, 2 * Math.PI);
+                  ctx.fill();
+                }}
+                warmupTicks={20}
+                cooldownTicks={80}
+                onEngineStop={() => fgRef.current?.zoomToFit(400, 60)}
               />
             </ErrorBoundary>
           </Suspense>
